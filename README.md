@@ -71,25 +71,116 @@ cmsbot generate "Write a blog post about sustainable architecture" --type blog -
 # Generate social media content
 cmsbot generate "Launch announcement for our new API" --type social --budget 2.00
 
+# Use a context file and writing style
+cmsbot generate "Write about fermented foods" --type blog --context-file contexts/my-brand.md --style casual
+
+# List available styles
+cmsbot styles
+
 # Show model pricing
 cmsbot models
 ```
 
 Output is saved to `./output/<slug>/index.html` with generated images.
 
+### Context files
+
+Context files let you define brand voice, target audience, and content guidelines that every agent in the pipeline will follow. Create a markdown file in `contexts/`:
+
+```bash
+contexts/
+  my-brand.md     # Your brand voice and audience
+  tech-blog.md    # Context for technical content
+  newsletter.md   # Newsletter-specific guidelines
+```
+
+Example context file:
+
+```markdown
+## Brand Voice
+- We are a developer tools company
+- Our voice is technical but approachable
+- We respect the reader's time
+
+## Target Audience
+- Senior developers and tech leads
+- Already familiar with cloud infrastructure
+
+## Content Guidelines
+- Include code examples where relevant
+- Link to documentation for deep dives
+```
+
+Pass it with `--context-file` (or `-c`):
+
+```bash
+cmsbot generate "Write about CI/CD best practices" -c contexts/tech-blog.md
+```
+
+### Writing styles
+
+Style presets control the tone and approach of the writing. Five built-in styles ship with the package:
+
+| Style | Description |
+|---|---|
+| `professional` | Polished, authoritative, business-appropriate |
+| `casual` | Conversational, like explaining to a smart friend |
+| `technical` | Precise, depth-first, for technically literate readers |
+| `storyteller` | Narrative-driven, opens with scenes and anecdotes |
+| `persuasive` | Argument-forward, anticipates counterpoints |
+
+```bash
+# Use a built-in style
+cmsbot generate "Write about remote work" --style professional
+
+# List all available styles
+cmsbot styles
+```
+
+**Custom styles:** Drop a `.md` file in a local `./styles/` directory and it becomes available by name. Local styles override built-in ones with the same name.
+
+```bash
+mkdir -p styles
+echo "Write with dry humor and British spelling." > styles/british-wit.md
+cmsbot generate "Write about queuing theory" --style british-wit
+```
+
+### Combining context + style
+
+Context and style compose naturally. Context defines *who you're writing for*, style defines *how you write*:
+
+```bash
+cmsbot generate "Write about our new API launch" \
+  --type blog \
+  --context-file contexts/my-brand.md \
+  --style persuasive \
+  --budget 5.00 \
+  --max-rounds 3
+```
+
 ### Python library
 
 ```python
 import asyncio
 from cmsbot import AutoreasonPipeline, Config
+from cmsbot.context import build_enriched_prompt, load_context_file, load_style
 
 config = Config.from_env()
 config.budget_cap = 5.00
 config.max_rounds = 3
 
+# Build enriched prompt with context and style
+context = load_context_file("contexts/my-brand.md")
+style = load_style("casual")
+task_prompt = build_enriched_prompt(
+    "Write a blog post about sustainable architecture",
+    context=context,
+    style=style,
+)
+
 pipeline = AutoreasonPipeline(config)
 result = asyncio.run(pipeline.run(
-    task_prompt="Write a blog post about sustainable architecture",
+    task_prompt=task_prompt,
     content_type="blog",
 ))
 
@@ -120,13 +211,15 @@ The `BudgetTracker` automatically signals when utilization exceeds 60%, allowing
 ```
 src/cmsbot/
   __init__.py          # Exports AutoreasonPipeline, Config
-  cli.py               # Click CLI (generate, check, models)
+  cli.py               # Click CLI (generate, check, models, styles)
   pipeline.py          # Autoreason orchestration loop
   config.py            # Environment/provider configuration
+  context.py           # Context file + style loading, prompt enrichment
   budget.py            # Token cost tracking and budget enforcement
   models.py            # Data models (Draft, Critique, PipelineResult, etc.)
   renderer.py          # Jinja2 HTML rendering
   templates/           # HTML templates (blog.html, social.html)
+  styles/              # Built-in writing style presets
   agents/
     author.py          # Initial draft writer
     strawman.py        # Adversarial critic
@@ -139,6 +232,7 @@ src/cmsbot/
     anthropic.py       # Claude provider
     openai_provider.py # GPT + OpenAI-compatible provider
     gemini.py          # Gemini provider
+contexts/              # User context files (brand voice, audience, guidelines)
 ```
 
 ## License

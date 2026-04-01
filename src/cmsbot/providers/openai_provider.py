@@ -32,12 +32,18 @@ class OpenAIProvider(LLMProvider):
             full_messages.append({"role": "system", "content": system_prompt})
         full_messages.extend(messages)
 
-        response = await self._client.chat.completions.create(
+        # Newer OpenAI models require max_completion_tokens instead of max_tokens
+        params: dict = dict(
             model=self.model,
             messages=full_messages,
-            max_tokens=max_tokens,
             temperature=temperature,
         )
+        if self.model.startswith(("o1", "o3", "gpt-5", "gpt-4.1")):
+            params["max_completion_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = max_tokens
+
+        response = await self._client.chat.completions.create(**params)
 
         choice = response.choices[0]
         usage = response.usage

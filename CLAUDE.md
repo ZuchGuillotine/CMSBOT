@@ -12,8 +12,10 @@ pip install -e .
 
 # Run CLI
 cmsbot generate "Your prompt" --type blog --budget 5.00 --max-rounds 3
+cmsbot generate "Your prompt" --context-file contexts/my-brand.md --style casual
 cmsbot check     # show configured providers
 cmsbot models    # show model pricing table
+cmsbot styles    # show available writing styles
 
 # Run as module
 python -m cmsbot generate "Your prompt"
@@ -59,6 +61,10 @@ All providers implement `LLMProvider.generate()` → `LLMResponse` (normalized c
 ### Judge blind evaluation
 
 `JudgePanel.evaluate()` shuffles the 3 candidates into random order, presents them as "Candidate 1/2/3" with no origin labels, runs 3 judges in parallel via `asyncio.gather()`, then uses Borda count (1st=2pts, 2nd=1pt, 3rd=0pts) to pick the winner. `_parse_ranking()` has multi-level fallback for extracting JSON arrays from LLM output.
+
+### Context and style system
+
+`context.py` handles loading user context files and style presets, then assembles them into an enriched `task_prompt` that all agents see. Context files live in `contexts/` (user-created, not shipped). Style presets live in `src/cmsbot/styles/` (shipped with package). Local `./styles/` directory can override built-in styles. The enriched prompt format is: `CONTEXT AND GUIDELINES:` + `WRITING STYLE:` + `TASK:`.
 
 ## Key conventions
 

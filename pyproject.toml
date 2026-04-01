@@ -30,4 +30,4 @@ cmsbot = "cmsbot.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-cmsbot = ["templates/*.html"]
+cmsbot = ["templates/*.html", "styles/*.md"]

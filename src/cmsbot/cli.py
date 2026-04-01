@@ -13,6 +13,7 @@ from rich.table import Table
 from rich.text import Text
 
 from cmsbot.config import Config
+from cmsbot.context import build_enriched_prompt, list_styles, load_context_file, load_style
 from cmsbot.pipeline import AutoreasonPipeline
 
 console = Console()
@@ -54,6 +55,17 @@ def main():
     help="Maximum refinement rounds (default: 5).",
 )
 @click.option(
+    "--context-file", "-c",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to a context file (brand voice, audience, guidelines).",
+)
+@click.option(
+    "--style", "-s",
+    default=None,
+    help="Writing style preset (e.g. professional, casual, technical). Run `cmsbot styles` to list.",
+)
+@click.option(
     "--env-file",
     type=click.Path(exists=True),
     default=None,
@@ -65,6 +77,8 @@ def generate(
     output_dir: str | None,
     budget: float | None,
     max_rounds: int | None,
+    context_file: str | None,
+    style: str | None,
     env_file: str | None,
 ):
     """Generate refined content using the Autoreason multi-agent pipeline."""
@@ -84,6 +98,26 @@ def generate(
         out_path = Path("output") / slug
     config.output_dir = out_path
 
+    # Load context and style, build enriched prompt
+    context_text = None
+    style_text = None
+
+    if context_file:
+        try:
+            context_text = load_context_file(context_file)
+        except FileNotFoundError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
+
+    if style:
+        try:
+            style_text = load_style(style)
+        except FileNotFoundError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
+
+    task_prompt = build_enriched_prompt(prompt, context=context_text, style=style_text)
+
     # Verify at least one provider is configured
     available = config.available_providers()
     if not available:
@@ -91,14 +125,18 @@ def generate(
         sys.exit(1)
 
     # Show startup info
+    context_label = Path(context_file).name if context_file else "none"
+    style_label = style or "none"
     console.print()
     console.print(Panel.fit(
         f"[bold]CMSBOT Autoreason Pipeline[/bold]\n\n"
-        f"[dim]Prompt:[/dim]  {prompt}\n"
-        f"[dim]Type:[/dim]    {content_type}\n"
-        f"[dim]Budget:[/dim]  ${config.budget_cap:.2f}\n"
-        f"[dim]Rounds:[/dim]  max {config.max_rounds}\n"
-        f"[dim]Output:[/dim]  {out_path}\n"
+        f"[dim]Prompt:[/dim]   {prompt}\n"
+        f"[dim]Type:[/dim]     {content_type}\n"
+        f"[dim]Context:[/dim]  {context_label}\n"
+        f"[dim]Style:[/dim]    {style_label}\n"
+        f"[dim]Budget:[/dim]   ${config.budget_cap:.2f}\n"
+        f"[dim]Rounds:[/dim]   max {config.max_rounds}\n"
+        f"[dim]Output:[/dim]   {out_path}\n"
         f"[dim]Providers:[/dim] {', '.join(available)}",
         border_style="bright_yellow",
     ))
@@ -110,7 +148,7 @@ def generate(
 
     try:
         result = asyncio.run(pipeline.run(
-            task_prompt=prompt,
+            task_prompt=task_prompt,
             content_type=content_type,
             output_dir=out_path,
         ))
@@ -144,6 +182,42 @@ def check():
             table.add_row(name, "[dim]not set[/dim]", "—")
 
     console.print(table)
+
+
+@main.command()
+def styles():
+    """List available writing style presets."""
+    from cmsbot.context import get_styles_dir
+
+    available = list_styles()
+    if not available:
+        console.print("[dim]No styles found.[/dim]")
+        return
+
+    table = Table(title="Available Styles")
+    table.add_column("Name", style="bold")
+    table.add_column("Source")
+    table.add_column("Preview")
+
+    builtin_dir = get_styles_dir()
+    local_dir = Path("styles")
+
+    for name in available:
+        # Determine source
+        local_path = local_dir / f"{name}.md"
+        if local_path.is_file():
+            source = "[cyan]local[/cyan] (./styles/)"
+            text = local_path.read_text(encoding="utf-8").strip()
+        else:
+            source = "[dim]built-in[/dim]"
+            text = (builtin_dir / f"{name}.md").read_text(encoding="utf-8").strip()
+
+        # First line as preview
+        preview = text.split("\n")[0][:60]
+        table.add_row(name, source, preview)
+
+    console.print(table)
+    console.print(f"\n[dim]Add custom styles to ./styles/*.md to override or extend.[/dim]")
 
 
 @main.command()
