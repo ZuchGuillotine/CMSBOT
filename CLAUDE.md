@@ -1,0 +1,70 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+# Install (requires venv — Homebrew Python is externally managed)
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# Run CLI
+cmsbot generate "Your prompt" --type blog --budget 5.00 --max-rounds 3
+cmsbot check     # show configured providers
+cmsbot models    # show model pricing table
+
+# Run as module
+python -m cmsbot generate "Your prompt"
+
+# Lint (ruff is a dev dependency)
+pip install -e ".[dev]"
+ruff check src/
+
+# Tests (none yet — pytest + pytest-asyncio are dev deps)
+pytest
+```
+
+## Architecture
+
+CMSBOT implements the **Autoreason pattern**: iterative multi-agent content refinement where agents argue over drafts until convergence, rather than optimizing a numeric score.
+
+### Pipeline flow (pipeline.py)
+
+```
+task_prompt
+  → Author A (Claude) writes draft
+  → Strawman (Gemini) attacks it — problems only, no fixes
+  → 3 candidates: A·keep | B·rewrite (Claude) | AB·synthesize (GPT-4o)
+  → Blind judge panel: 3 judges from different providers, shuffled candidates, Borda count
+  → Winner becomes new A; streak++ if A wins, else streak=0
+  → Loop until streak=2 or budget/rounds exhausted
+  → Image Director plans images → DALL-E 3 generates them
+  → Renderer outputs styled HTML
+```
+
+### Provider system
+
+All providers implement `LLMProvider.generate()` → `LLMResponse` (normalized content + token counts + cost). The `build_provider(name, config)` factory in `providers/__init__.py` maps string names to instances. Four providers: `anthropic`, `openai`, `gemini`, `openai_compat` (for Qwen via Together AI/OpenRouter).
+
+### Role assignment
+
+`Config.roles` (a `RoleAssignment` dataclass) maps pipeline roles to provider names. The pipeline calls `build_provider(roles.author, config)` etc. to wire agents to providers. Roles: `author`, `strawman`, `rewriter`, `synthesizer`, `judges` (list of 3), `image_director`.
+
+### Budget system
+
+`BudgetTracker` in budget.py accumulates cost per API call using a `MODEL_COSTS` pricing table. The pipeline checks `can_afford()` before each step and `should_downgrade()` (>60% utilization) to signal when cheaper models should be used. Image costs tracked separately via `record_image()`.
+
+### Judge blind evaluation
+
+`JudgePanel.evaluate()` shuffles the 3 candidates into random order, presents them as "Candidate 1/2/3" with no origin labels, runs 3 judges in parallel via `asyncio.gather()`, then uses Borda count (1st=2pts, 2nd=1pt, 3rd=0pts) to pick the winner. `_parse_ranking()` has multi-level fallback for extracting JSON arrays from LLM output.
+
+## Key conventions
+
+- All LLM calls are async. The CLI bridges with `asyncio.run()`.
+- Agents return `tuple[DataModel, LLMResponse]` — the domain object plus the raw response for budget tracking.
+- Content is written as markdown-style prose by agents, then converted to HTML by `renderer.py` at the end.
+- Templates are Jinja2 HTML in `src/cmsbot/templates/`, bundled via `tool.setuptools.package-data`.
+- Env var names are mixed case for backwards compat (`Anthropic_API_Key`, `OpenAI_API_Key`, `GEMINI_API_Key`) — config.py accepts both forms.
+- The `openai_provider.py` file contains both `OpenAIProvider` (standard) and `OpenAICompatProvider` (custom base_url for Qwen etc.).
