@@ -1,0 +1,24 @@
+{
+  "name": "cmsbot-seo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "research": "tsx src/index.ts",
+    "autocomplete": "tsx src/index.ts --autocomplete-only",
+    "reddit": "tsx src/index.ts --reddit-only",
+    "competitors": "tsx src/index.ts --competitors-only",
+    "evaluate": "tsx src/evaluate.ts",
+    "evaluate:gsc": "tsx src/evaluate.ts --gsc-only",
+    "evaluate:ga4": "tsx src/evaluate.ts --ga4-only",
+    "test:connectivity": "tsx src/test-connectivity.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@google-analytics/data": "^5.2.1",
+    "googleapis": "^171.4.0"
+  }
+}

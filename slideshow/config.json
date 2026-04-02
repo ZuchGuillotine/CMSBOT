@@ -1,0 +1,107 @@
+{
+  "brand": {
+    "name": "Example Project",
+    "tagline": "Show how the product works",
+    "urls": {
+      "website": "https://example.com",
+      "blog": "https://example.com/blog"
+    },
+    "cta_variants": [
+      "see how it works",
+      "try the workflow yourself",
+      "watch the full breakdown on the site"
+    ]
+  },
+  "platforms": {
+    "tiktok": {
+      "aspect_ratio": "9:16",
+      "resolution": [1080, 1920],
+      "max_slides": 35,
+      "optimal_slides": [5, 8],
+      "text_overlay": "native_only",
+      "max_caption_chars": 4000
+    },
+    "instagram": {
+      "aspect_ratio": "4:5",
+      "resolution": [1080, 1350],
+      "max_slides": 20,
+      "optimal_slides": [5, 10],
+      "text_overlay": "burned_in_ok",
+      "max_caption_chars": 2200
+    }
+  },
+  "image_generation": {
+    "provider": "nano_banana_pro",
+    "base_style": "candid_phone_photo",
+    "resolution": "1080p",
+    "post_processing": {
+      "film_grain_percent": 2.5,
+      "jpeg_quality": 87,
+      "strip_metadata": true,
+      "micro_rotation_range": [0.3, 0.8]
+    }
+  },
+  "content_rules": {
+    "max_words_per_slide": 20,
+    "ideal_words_per_slide": [8, 15],
+    "banned_words": [
+      "game-changer",
+      "revolutionary",
+      "must-have",
+      "unlock your potential",
+      "transform your life",
+      "groundbreaking"
+    ],
+    "voice": "Direct, specific, and conversational.",
+    "medical_disclaimer": "Never make unsupported legal, financial, or medical claims."
+  },
+  "formats": [
+    {
+      "id": "mistake_list",
+      "name": "X mistakes you're making",
+      "slides": "5-7 mistakes + CTA",
+      "hook_template": "{N} {topic} mistakes that are costing you results",
+      "best_for": ["common errors", "workflow mistakes", "timing mistakes"]
+    },
+    {
+      "id": "comparison",
+      "name": "Before vs after",
+      "slides": "state A vs state B + CTA",
+      "hook_template": "before vs after using {topic}",
+      "best_for": ["transformations", "workflow improvements", "process upgrades"]
+    },
+    {
+      "id": "myth_bust",
+      "name": "Things people get wrong",
+      "slides": "contrarian fact per slide + CTA",
+      "hook_template": "{common belief} is wrong. do this instead",
+      "best_for": ["education", "debunks", "buyer misconceptions"]
+    },
+    {
+      "id": "routine_walkthrough",
+      "name": "How the workflow actually works",
+      "slides": "step-by-step walkthrough + CTA",
+      "hook_template": "the workflow we use to {outcome}",
+      "best_for": ["process explainers", "product demos", "team routines"]
+    },
+    {
+      "id": "data_reveal",
+      "name": "What the data actually shows",
+      "slides": "evidence slides + CTA",
+      "hook_template": "we tracked {metric}. here's what actually mattered",
+      "best_for": ["analytics", "experiments", "benchmarks"]
+    },
+    {
+      "id": "hot_take",
+      "name": "Unpopular opinion",
+      "slides": "contrarian opener + evidence slides + CTA",
+      "hook_template": "{practice} is overrated. here's what matters more",
+      "best_for": ["category opinions", "positioning", "strong takes"]
+    }
+  ],
+  "hashtag_pools": {
+    "core": ["#marketing", "#contentmarketing", "#seo", "#growth", "#socialmedia"],
+    "product": ["#saas", "#productmarketing", "#demandgen", "#contentops"],
+    "trending": ["#marketingtips", "#businesstok", "#creatoreconomy"]
+  }
+}
