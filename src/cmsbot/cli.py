@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sys
 from pathlib import Path
 
@@ -12,9 +14,24 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from cmsbot.blog_draft import export_blog_draft
 from cmsbot.config import Config
 from cmsbot.context import build_enriched_prompt, list_styles, load_context_file, load_style
 from cmsbot.pipeline import AutoreasonPipeline
+from cmsbot.project import (
+    combine_context_text,
+    load_project_profile,
+    make_project_profile,
+    write_project_profile,
+)
+from cmsbot.topics import (
+    build_cmsbot_command,
+    format_topic_brief,
+    latest_topic_brief_file,
+    load_topic_briefs,
+    merge_topic_briefs,
+)
+from cmsbot.voice import synthesize_voice
 
 console = Console()
 
@@ -61,6 +78,12 @@ def main():
     help="Path to a context file (brand voice, audience, guidelines).",
 )
 @click.option(
+    "--project-file", "-p",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to a CMSBOT project profile JSON file.",
+)
+@click.option(
     "--style", "-s",
     default=None,
     help="Writing style preset (e.g. professional, casual, technical). Run `cmsbot styles` to list.",
@@ -78,6 +101,7 @@ def generate(
     budget: float | None,
     max_rounds: int | None,
     context_file: str | None,
+    project_file: str | None,
     style: str | None,
     env_file: str | None,
 ):
@@ -95,17 +119,26 @@ def generate(
         out_path = Path(output_dir)
     else:
         slug = _slugify(prompt[:60])
-        out_path = Path("output") / slug
+        out_path = config.output_dir / slug
     config.output_dir = out_path
 
     # Load context and style, build enriched prompt
     context_text = None
     style_text = None
+    project_context = None
 
     if context_file:
         try:
             context_text = load_context_file(context_file)
         except FileNotFoundError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
+
+    if project_file:
+        try:
+            project = load_project_profile(project_file)
+            project_context = project.render_context_markdown()
+        except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
             console.print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
@@ -116,7 +149,11 @@ def generate(
             console.print(f"[red]Error:[/red] {e}")
             sys.exit(1)
 
-    task_prompt = build_enriched_prompt(prompt, context=context_text, style=style_text)
+    task_prompt = build_enriched_prompt(
+        prompt,
+        context=combine_context_text(project_context, context_text),
+        style=style_text,
+    )
 
     # Verify at least one provider is configured
     available = config.available_providers()
@@ -125,7 +162,12 @@ def generate(
         sys.exit(1)
 
     # Show startup info
-    context_label = Path(context_file).name if context_file else "none"
+    context_parts: list[str] = []
+    if project_file:
+        context_parts.append(Path(project_file).name)
+    if context_file:
+        context_parts.append(Path(context_file).name)
+    context_label = " + ".join(context_parts) if context_parts else "none"
     style_label = style or "none"
     console.print()
     console.print(Panel.fit(
@@ -163,6 +205,67 @@ def generate(
     _print_results(result, pipeline.budget, out_path)
 
 
+@main.command("export-blog-draft")
+@click.argument("output_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--category", default=None, help="Optional category for the exported draft.")
+@click.option("--tags", default=None, help="Comma-separated tags for the exported draft.")
+@click.option("--author", default=None, help="Optional author for the exported draft.")
+@click.option(
+    "--status",
+    type=click.Choice(["draft", "published"]),
+    default="draft",
+    show_default=True,
+    help="Draft status to write into the exported artifact.",
+)
+@click.option(
+    "--thumbnail-url",
+    default=None,
+    help="Optional thumbnail URL override. Defaults to the hero image detected in the HTML.",
+)
+@click.option(
+    "--save",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional explicit output path. Defaults to <output_dir>/blog_draft.json.",
+)
+def export_blog_draft_command(
+    output_dir: Path,
+    category: str | None,
+    tags: str | None,
+    author: str | None,
+    status: str,
+    thumbnail_url: str | None,
+    save: Path | None,
+):
+    """Export CMSBOT HTML output into a portable blog_draft.json artifact."""
+    tag_list = [tag.strip() for tag in tags.split(",")] if tags else []
+
+    try:
+        payload, destination = export_blog_draft(
+            output_dir,
+            save_path=save,
+            category=category,
+            tags=tag_list,
+            author=author,
+            status=status,
+            thumbnail_url=thumbnail_url,
+        )
+    except FileNotFoundError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    console.print(
+        Panel.fit(
+            f"[bold]Blog Draft Exported[/bold]\n\n"
+            f"[dim]Title:[/dim] {payload['title']}\n"
+            f"[dim]Slug:[/dim] {payload['slug']}\n"
+            f"[dim]Status:[/dim] {payload['status']}\n"
+            f"[dim]Output:[/dim] {destination}",
+            border_style="green",
+        )
+    )
+
+
 @main.command()
 def check():
     """Check which API providers are configured."""
@@ -174,7 +277,7 @@ def check():
     table.add_column("Status")
     table.add_column("Model")
 
-    for name in ("anthropic", "openai", "gemini", "openai_compat"):
+    for name in ("anthropic", "anthropic_opus", "openai", "gemini", "openai_compat"):
         cfg = getattr(config, name)
         if cfg:
             table.add_row(name, "[green]configured[/green]", cfg.model)
@@ -218,6 +321,162 @@ def styles():
 
     console.print(table)
     console.print(f"\n[dim]Add custom styles to ./styles/*.md to override or extend.[/dim]")
+
+
+@main.command("topics")
+@click.option(
+    "--briefs-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Explicit topic brief JSON file. Defaults to the latest file in ./seo/output.",
+)
+@click.option(
+    "--curated-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Optional curated topic brief JSON file to merge in.",
+)
+@click.option("--limit", type=int, default=20, help="Number of topics to display.")
+@click.option(
+    "--command",
+    "command_index",
+    type=int,
+    default=None,
+    help="Print the cmsbot command for a specific topic index.",
+)
+@click.option(
+    "--project-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Project profile to include in generated commands.",
+)
+@click.option("--style", default=None, help="Optional writing style to include in generated commands.")
+def topics(
+    briefs_file: str | None,
+    curated_file: str | None,
+    limit: int,
+    command_index: int | None,
+    project_file: str | None,
+    style: str | None,
+):
+    """List topic briefs from SEO output and optional curated sources."""
+    output_dir = os.getenv("CMSBOT_SEO_OUTPUT_DIR", "seo/output")
+    chosen_file = Path(briefs_file) if briefs_file else latest_topic_brief_file(output_dir)
+    if chosen_file is None:
+        console.print("[red]Error:[/red] No topic briefs found. Run the SEO evaluator first or pass --briefs-file.")
+        sys.exit(1)
+
+    seo_briefs = load_topic_briefs(chosen_file)
+    curated_briefs = load_topic_briefs(curated_file) if curated_file else []
+    merged = merge_topic_briefs(seo_briefs, curated_briefs)
+
+    if command_index is not None:
+        if command_index < 0 or command_index >= len(merged):
+            console.print(f"[red]Error:[/red] Topic index {command_index} out of range (0-{max(len(merged) - 1, 0)}).")
+            sys.exit(1)
+        console.print(
+            build_cmsbot_command(
+                merged[command_index],
+                project_file=project_file,
+                style=style,
+            )
+        )
+        return
+
+    for idx, brief in enumerate(merged[:limit]):
+        console.print(format_topic_brief(brief, idx))
+        console.print()
+
+    console.print(f"[dim]Loaded {len(merged)} topic briefs from {chosen_file}.[/dim]")
+
+
+@main.group()
+def project():
+    """Project profile helpers for reusable marketing setups."""
+    pass
+
+
+@project.command("init")
+@click.argument("name")
+@click.option(
+    "--output",
+    type=click.Path(),
+    default=None,
+    help="Output JSON path (default: ./projects/<slug>.json).",
+)
+def project_init(name: str, output: str | None):
+    """Create a starter CMSBOT project profile JSON file."""
+    data = make_project_profile(name)
+    destination = Path(output) if output else Path("projects") / f"{data['slug']}.json"
+    path = write_project_profile(destination, data)
+    console.print(f"[green]Wrote project profile:[/green] {path}")
+
+
+@project.command("context")
+@click.argument("project_file", type=click.Path(exists=True))
+@click.option(
+    "--output",
+    type=click.Path(),
+    default=None,
+    help="Optional markdown output path. Prints to stdout when omitted.",
+)
+def project_context(project_file: str, output: str | None):
+    """Render a markdown context file from a project profile."""
+    profile = load_project_profile(project_file)
+    content = profile.render_context_markdown()
+    if output:
+        destination = Path(output)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(content, encoding="utf-8")
+        console.print(f"[green]Wrote context file:[/green] {destination}")
+        return
+    console.print(content)
+
+
+@project.command("voice")
+@click.argument("project_file", type=click.Path(exists=True))
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+@click.option("--provider", default=None, help="Preferred LLM provider for voice synthesis.")
+@click.option("--brief", default=None, help="Optional extra product brief to include.")
+@click.option(
+    "--output",
+    type=click.Path(),
+    default=None,
+    help="Optional JSON output path. Prints to stdout when omitted.",
+)
+def project_voice(
+    project_file: str,
+    env_file: str | None,
+    provider: str | None,
+    brief: str | None,
+    output: str | None,
+):
+    """Generate tone and personality flags from a project profile."""
+    profile = load_project_profile(project_file)
+    config = Config.from_env(env_file)
+
+    try:
+        result = asyncio.run(
+            synthesize_voice(
+                profile=profile,
+                config=config,
+                preferred_provider=provider,
+                extra_brief=brief,
+            )
+        )
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    rendered = json.dumps(result, indent=2)
+    if output:
+        destination = Path(output)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(rendered + "\n", encoding="utf-8")
+        console.print(f"[green]Wrote voice profile:[/green] {destination}")
+        return
+
+    console.print(rendered)
 
 
 @main.command()

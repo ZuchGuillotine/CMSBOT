@@ -27,12 +27,20 @@ MODEL_COSTS: dict[str, dict[str, float]] = {
 # Fallback cost if model not in table
 FALLBACK_COST = {"input": 3.00, "output": 15.00}
 
-# DALL-E pricing per image
+# Image generation pricing per image
 DALLE_COSTS = {
     "1024x1024": 0.040,
     "1024x1792": 0.080,
     "1792x1024": 0.080,
 }
+
+GROK_IMAGE_COSTS = {
+    "1024x1024": 0.07,
+    "1024x1536": 0.10,
+    "1536x1024": 0.10,
+}
+
+NANOBANANA_COST_PER_IMAGE = 0.04
 
 
 def compute_cost(model: str, input_tokens: int, output_tokens: int) -> float:

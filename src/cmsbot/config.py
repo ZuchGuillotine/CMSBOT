@@ -44,8 +44,9 @@ class Config:
     # Output settings
     output_dir: Path = field(default_factory=lambda: Path("output"))
 
-    # Optional
+    # Optional / image providers
     unsplash_key: str | None = None
+    xai_key: str | None = None
 
     @classmethod
     def from_env(cls, env_path: str | Path | None = None) -> Config:
@@ -94,6 +95,7 @@ class Config:
         max_rounds = int(os.getenv("CMSBOT_MAX_ROUNDS", "5"))
         output_dir = Path(os.getenv("CMSBOT_OUTPUT_DIR", "output"))
         unsplash_key = os.getenv("UNSPLASH_ACCESS_KEY")
+        xai_key = os.getenv("XAI_API_KEY")
 
         return cls(
             anthropic=anthropic,
@@ -105,6 +107,7 @@ class Config:
             max_rounds=max_rounds,
             output_dir=output_dir,
             unsplash_key=unsplash_key,
+            xai_key=xai_key,
         )
 
     def get_provider_config(self, name: str) -> ProviderConfig:

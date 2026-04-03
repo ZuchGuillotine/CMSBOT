@@ -2,13 +2,49 @@
 
 from __future__ import annotations
 
+import os
 from importlib import resources
 from pathlib import Path
+
+
+def _style_name_from_path(path: Path) -> str:
+    """Normalize a style filename into its public style name."""
+    if path.name.endswith(".local.md"):
+        return path.name[: -len(".local.md")]
+    return path.stem
 
 
 def get_styles_dir() -> Path:
     """Return the path to the built-in styles directory."""
     return Path(resources.files("cmsbot") / "styles")  # type: ignore[arg-type]
+
+
+def get_local_style_dirs() -> list[Path]:
+    """Return project-specific style directories to search before built-ins."""
+    directories: list[Path] = []
+
+    env_value = os.getenv("CMSBOT_STYLE_DIRS", "")
+    for raw_path in env_value.split(os.pathsep):
+        if not raw_path.strip():
+            continue
+        candidate = Path(raw_path)
+        if candidate.is_dir():
+            directories.append(candidate)
+
+    default_local = Path("styles")
+    if default_local.is_dir():
+        directories.append(default_local)
+
+    # Preserve order while removing duplicates.
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for directory in directories:
+        resolved = directory.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(directory)
+    return unique
 
 
 def list_styles() -> list[str]:
@@ -17,23 +53,25 @@ def list_styles() -> list[str]:
 
     # Built-in styles shipped with the package
     for f in get_styles_dir().glob("*.md"):
-        styles.add(f.stem)
+        styles.add(_style_name_from_path(f))
 
-    # User styles in local ./styles/ directory
-    local = Path("styles")
-    if local.is_dir():
+    # User styles in local directories
+    for local in get_local_style_dirs():
         for f in local.glob("*.md"):
-            styles.add(f.stem)
+            styles.add(_style_name_from_path(f))
 
     return sorted(styles)
 
 
 def load_style(name: str) -> str:
-    """Load a style preset by name. Checks local ./styles/ first, then built-in."""
-    # Local override takes priority
-    local = Path("styles") / f"{name}.md"
-    if local.is_file():
-        return local.read_text(encoding="utf-8").strip()
+    """Load a style preset by name. Checks local style dirs first, then built-in."""
+    for local_dir in get_local_style_dirs():
+        for candidate in (
+            local_dir / f"{name}.local.md",
+            local_dir / f"{name}.md",
+        ):
+            if candidate.is_file():
+                return candidate.read_text(encoding="utf-8").strip()
 
     # Built-in
     builtin = get_styles_dir() / f"{name}.md"

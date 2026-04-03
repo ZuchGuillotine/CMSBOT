@@ -1,0 +1,138 @@
+{
+  "name": "Northstar CRM",
+  "slug": "northstar-crm",
+  "website": "https://northstar.example.com",
+  "description": "Northstar CRM helps revenue teams capture, enrich, and route inbound leads without manual spreadsheet work.",
+  "audience": [
+    "Revenue operations leaders at B2B SaaS companies",
+    "Demand generation teams that care about attribution and pipeline quality"
+  ],
+  "voice": [
+    "Direct",
+    "Operator-minded",
+    "Specific",
+    "Low-hype"
+  ],
+  "goals": [
+    "Own high-intent SEO around lead routing, enrichment, and attribution",
+    "Turn blog content into demo requests and newsletter growth"
+  ],
+  "products": [
+    "Lead capture",
+    "Lead enrichment",
+    "Routing automation",
+    "Attribution dashboards"
+  ],
+  "differentiators": [
+    "Unifies lead enrichment, routing, and attribution in one workflow",
+    "Built for lean revenue teams that need fast implementation"
+  ],
+  "content": {
+    "ctas": [
+      "Book a demo",
+      "See the workflow",
+      "Start a free trial"
+    ],
+    "brand_rules": [
+      "Use concrete examples from revenue operations work.",
+      "Favor plain English over category jargon."
+    ],
+    "disallowed_claims": [
+      "Do not promise guaranteed revenue outcomes."
+    ]
+  },
+  "seo": {
+    "seed_keywords": [
+      "lead routing software",
+      "lead enrichment tool",
+      "b2b attribution software",
+      "inbound lead management"
+    ],
+    "expansion_seeds": [
+      "lead routing",
+      "lead enrichment",
+      "attribution software"
+    ],
+    "long_tail_topics": [
+      "lead routing",
+      "lead enrichment",
+      "crm hygiene",
+      "pipeline attribution"
+    ],
+    "question_prefixes": [
+      "how to",
+      "best way to",
+      "what is the best",
+      "why does"
+    ],
+    "buyer_intent_signals": [
+      "best",
+      "top",
+      "compare",
+      "vs",
+      "pricing",
+      "software",
+      "tool",
+      "platform"
+    ],
+    "subreddits": [
+      "sales",
+      "marketing",
+      "revops",
+      "SaaS"
+    ],
+    "competitors": [
+      {
+        "name": "HubSpot",
+        "domain": "hubspot.com",
+        "sitemapPath": "/sitemap.xml"
+      },
+      {
+        "name": "Clearbit",
+        "domain": "clearbit.com",
+        "sitemapPath": "/sitemap.xml"
+      }
+    ],
+    "relevance_terms": [
+      "lead",
+      "routing",
+      "enrichment",
+      "crm",
+      "attribution",
+      "pipeline",
+      "revenue"
+    ],
+    "blog_path_prefix": "/blog/",
+    "blog_api_url": "https://northstar.example.com/api/blog",
+    "gsc_site_url": "sc-domain:northstar.example.com",
+    "ga4_property_id": "123456789",
+    "google_service_account_key_path": "",
+    "conversion_event_name": "generate_lead"
+  },
+  "slideshow": {
+    "tagline": "Revenue systems that stay clean under pressure.",
+    "cta_variants": [
+      "See the workflow",
+      "Watch the routing logic",
+      "Try it on your pipeline"
+    ],
+    "voice": "Sharp, credible, slightly skeptical of bloated RevOps software.",
+    "banned_words": [
+      "game-changer",
+      "revolutionary",
+      "must-have",
+      "unleash"
+    ],
+    "screenshot_dir": "./slideshow/screenshots",
+    "screenshot_refs": [
+      "routing-dashboard",
+      "enrichment-panel",
+      "attribution-report"
+    ],
+    "platforms": [
+      "tiktok",
+      "instagram",
+      "linkedin"
+    ]
+  }
+}

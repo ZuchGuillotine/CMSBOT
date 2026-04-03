@@ -57,7 +57,18 @@ class ImageSpec:
     alt_text: str
     placement: str  # "hero", "section-1", "section-2", etc.
     method: str  # "generate" or "fetch"
+    search_query: str = ""
     file_path: str = ""  # Filled after generation/fetch
+
+
+@dataclass
+class ImageCandidate:
+    """A candidate image from one provider, awaiting judging."""
+    image_bytes: bytes
+    provider: str
+    model: str
+    cost: float
+    placement: str
 
 
 @dataclass

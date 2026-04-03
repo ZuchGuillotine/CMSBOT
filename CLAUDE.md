@@ -42,7 +42,7 @@ task_prompt
   → Blind judge panel: 3 judges from different providers, shuffled candidates, Borda count
   → Winner becomes new A; streak++ if A wins, else streak=0
   → Loop until streak=2 or budget/rounds exhausted
-  → Image Director plans images → DALL-E 3 generates them
+  → Image Director plans images → multiple image providers generate candidates → ImageJudge picks the winner
   → Renderer outputs styled HTML
 ```
 
@@ -56,7 +56,7 @@ All providers implement `LLMProvider.generate()` → `LLMResponse` (normalized c
 
 ### Budget system
 
-`BudgetTracker` in budget.py accumulates cost per API call using a `MODEL_COSTS` pricing table. The pipeline checks `can_afford()` before each step and `should_downgrade()` (>60% utilization) to signal when cheaper models should be used. Image costs tracked separately via `record_image()`.
+`BudgetTracker` in budget.py accumulates cost per API call using a `MODEL_COSTS` pricing table. The pipeline checks `can_afford()` before each step and `should_downgrade()` (>60% utilization) to signal when cheaper models should be used. Generated image costs accumulate in `image_cost`, while the image judge is tracked like any other LLM call.
 
 ### Judge blind evaluation
 
@@ -72,5 +72,5 @@ All providers implement `LLMProvider.generate()` → `LLMResponse` (normalized c
 - Agents return `tuple[DataModel, LLMResponse]` — the domain object plus the raw response for budget tracking.
 - Content is written as markdown-style prose by agents, then converted to HTML by `renderer.py` at the end.
 - Templates are Jinja2 HTML in `src/cmsbot/templates/`, bundled via `tool.setuptools.package-data`.
-- Env var names are mixed case for backwards compat (`Anthropic_API_Key`, `OpenAI_API_Key`, `GEMINI_API_Key`) — config.py accepts both forms.
+- Env var names are mixed case for backwards compat (`Anthropic_API_Key`, `OpenAI_API_Key`, `GEMINI_API_Key`) — config.py accepts both forms, plus `XAI_API_KEY` and `UNSPLASH_ACCESS_KEY` for optional image providers.
 - The `openai_provider.py` file contains both `OpenAIProvider` (standard) and `OpenAICompatProvider` (custom base_url for Qwen etc.).

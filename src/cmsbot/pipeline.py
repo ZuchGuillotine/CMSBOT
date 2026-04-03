@@ -8,6 +8,7 @@ from typing import Callable
 
 from cmsbot.agents.author import AuthorAgent
 from cmsbot.agents.candidates import RewriterAgent, SynthesizerAgent
+from cmsbot.agents.image_judge import ImageJudge
 from cmsbot.agents.images import ImageDirector
 from cmsbot.agents.judge import JudgePanel
 from cmsbot.agents.strawman import StrawmanAgent
@@ -15,6 +16,13 @@ from cmsbot.budget import BudgetTracker
 from cmsbot.config import Config
 from cmsbot.models import ContentType, Draft, PipelineResult, RoundResult
 from cmsbot.providers import build_provider
+from cmsbot.providers.image_providers import (
+    DalleImageProvider,
+    GrokImageProvider,
+    ImageProvider,
+    NanobananProvider,
+    UnsplashProvider,
+)
 from cmsbot.providers.openai_provider import OpenAIProvider
 from cmsbot.renderer import Renderer
 
@@ -58,15 +66,50 @@ class AutoreasonPipeline:
             judge_providers.append(build_provider(name, self.config))
         self.judge_panel = JudgePanel(judge_providers)
 
-        # Image director uses the author's provider for planning, OpenAI for DALL-E
+        # Image providers — build all available, fall back to DALL-E only
         director_provider = build_provider(roles.image_director, self.config)
-        openai_cfg = self.config.get_provider_config("openai")
-        openai_image_provider = OpenAIProvider(
-            api_key=openai_cfg.api_key, model=openai_cfg.model
-        )
+        image_providers: list[ImageProvider] = []
+
+        if self.config.xai_key:
+            image_providers.append(
+                GrokImageProvider(api_key=self.config.xai_key)
+            )
+
+        if self.config.gemini:
+            image_providers.append(
+                NanobananProvider(api_key=self.config.gemini.api_key)
+            )
+
+        if self.config.unsplash_key:
+            image_providers.append(
+                UnsplashProvider(access_key=self.config.unsplash_key)
+            )
+
+        # DALL-E as fallback if fewer than 2 providers available
+        if len(image_providers) < 2 and self.config.openai:
+            image_providers.append(
+                DalleImageProvider(api_key=self.config.openai.api_key)
+            )
+
+        if not image_providers:
+            raise ValueError(
+                "No image providers configured. Set at least one of: "
+                "XAI_API_KEY, GEMINI_API_KEY, UNSPLASH_ACCESS_KEY, OPENAI_API_KEY"
+            )
+
+        # Image judge — use a vision-capable model (prefer GPT-4o for vision)
+        if self.config.openai:
+            judge_provider = OpenAIProvider(
+                api_key=self.config.openai.api_key, model="gpt-4o"
+            )
+        else:
+            judge_provider = director_provider
+        image_judge = ImageJudge(judge_provider)
+
         self.image_director = ImageDirector(
             director_provider=director_provider,
-            image_provider=openai_image_provider,
+            image_providers=image_providers,
+            judge=image_judge,
             budget=self.budget,
         )
 
@@ -192,11 +235,12 @@ class AutoreasonPipeline:
                 self._log(f"\n*** CONVERGED after {round_num} rounds (streak=2) ***")
                 break
 
-        # --- Step 6: Image generation ---
+        # --- Step 6: Image generation (multi-candidate + judge) ---
         self._log(f"\n{'='*60}")
         self._log("[Image Director] Planning and generating images...")
         images, img_responses = await self.image_director.generate_images(
-            task_prompt, current_draft.content, content_type, output_dir
+            task_prompt, current_draft.content, content_type, output_dir,
+            log_fn=self._log,
         )
         for ir in img_responses:
             self.budget.record("image_director", ir.provider, ir.model, ir.input_tokens, ir.output_tokens)

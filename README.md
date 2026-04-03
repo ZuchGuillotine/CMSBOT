@@ -1,240 +1,95 @@
 # CMSBOT
 
-Multi-agent content refinement pipeline using the **Autoreason pattern** — iterative debate between AI agents that argue over drafts until convergence, rather than optimizing a numeric score.
+CMSBOT is the reusable content and marketing core that can be pointed at different projects through a committed project pack.
 
-## How it works
+## What lives in core
 
-```
-Prompt
-  -> Author (Claude) writes initial draft
-  -> Strawman (Gemini) attacks it — problems only, no fixes
-  -> 3 candidates generated:
-       A = keep original
-       B = full rewrite (Claude) informed by critique
-       AB = synthesize best of A and B (GPT-4o)
-  -> Blind judge panel: 3 judges from different providers, shuffled candidates, Borda count
-  -> Winner becomes new draft; streak++ if A wins, else reset
-  -> Loop until streak=2 (convergence) or budget/rounds exhausted
-  -> Image Director plans images -> DALL-E 3 generates them
-  -> Renderer outputs styled HTML
-```
+- `cmsbot generate`
+  Multi-agent long-form and social content generation using the Autoreason pipeline.
+- `cmsbot project ...`
+  Project profile scaffolding, context rendering, and voice synthesis.
+- `cmsbot topics`
+  Turns SEO evaluation output and curated briefs into ready-to-run generation commands.
+- `cmsbot export-blog-draft`
+  Exports rendered HTML into a portable `blog_draft.json` artifact.
+- [`seo/`](./seo/README.md)
+  Project-driven keyword research and Search Console / GA4 evaluation.
+- [`slideshow/`](./slideshow/README.md)
+  Blog-to-slideshow spec generation, image generation, post-processing, and review output.
 
-Each round pits the incumbent draft against two challengers. When the original survives two consecutive rounds of blind judging, it's considered converged — no agent can improve it further.
+What does not belong in core:
 
-## Installation
+- project CMS publishing logic
+- S3 upload paths and auth cookies
+- direct database insertion
+- tunnels, bastions, and other environment-specific delivery logic
 
-Requires Python 3.10+.
+Those stay in each product repo as local adapters.
+
+## Quick Start
 
 ```bash
-# Clone and install
 git clone https://github.com/ZuchGuillotine/CMSBOT.git
 cd CMSBOT
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+./run.sh bootstrap
 ```
 
-## Configuration
+Bootstrap creates `.venv`, installs the Python package, and installs `seo` Node dependencies.
 
-Copy `.env.example` to `.env` and add your API keys:
+## Command Surface
 
 ```bash
-cp .env.example .env
-```
-
-```env
-# Required — all three providers are used in the pipeline
-Anthropic_API_Key=sk-ant-...
-OpenAI_API_Key=sk-proj-...
-GEMINI_API_Key=AIza...
-
-# Optional — OpenAI-compatible provider for Qwen/other models
-OPENAI_COMPAT_API_KEY=
-OPENAI_COMPAT_BASE_URL=https://api.together.xyz/v1
-OPENAI_COMPAT_MODEL=Qwen/Qwen3-235B-A22B
-```
-
-Verify your providers are configured:
-
-```bash
-cmsbot check
-```
-
-## Usage
-
-### CLI
-
-```bash
-# Generate a blog post
-cmsbot generate "Write a blog post about sustainable architecture" --type blog --budget 5.00 --max-rounds 3
-
-# Generate social media content
-cmsbot generate "Launch announcement for our new API" --type social --budget 2.00
-
-# Use a context file and writing style
-cmsbot generate "Write about fermented foods" --type blog --context-file contexts/my-brand.md --style casual
-
-# List available styles
-cmsbot styles
-
-# Show model pricing
-cmsbot models
-```
-
-Output is saved to `./output/<slug>/index.html` with generated images.
-
-### Context files
-
-Context files let you define brand voice, target audience, and content guidelines that every agent in the pipeline will follow. Create a markdown file in `contexts/`:
-
-```bash
-contexts/
-  my-brand.md     # Your brand voice and audience
-  tech-blog.md    # Context for technical content
-  newsletter.md   # Newsletter-specific guidelines
-```
-
-Example context file:
-
-```markdown
-## Brand Voice
-- We are a developer tools company
-- Our voice is technical but approachable
-- We respect the reader's time
-
-## Target Audience
-- Senior developers and tech leads
-- Already familiar with cloud infrastructure
-
-## Content Guidelines
-- Include code examples where relevant
-- Link to documentation for deep dives
-```
-
-Pass it with `--context-file` (or `-c`):
-
-```bash
-cmsbot generate "Write about CI/CD best practices" -c contexts/tech-blog.md
-```
-
-### Writing styles
-
-Style presets control the tone and approach of the writing. Five built-in styles ship with the package:
-
-| Style | Description |
-|---|---|
-| `professional` | Polished, authoritative, business-appropriate |
-| `casual` | Conversational, like explaining to a smart friend |
-| `technical` | Precise, depth-first, for technically literate readers |
-| `storyteller` | Narrative-driven, opens with scenes and anecdotes |
-| `persuasive` | Argument-forward, anticipates counterpoints |
-
-```bash
-# Use a built-in style
-cmsbot generate "Write about remote work" --style professional
-
-# List all available styles
-cmsbot styles
-```
-
-**Custom styles:** Drop a `.md` file in a local `./styles/` directory and it becomes available by name. Local styles override built-in ones with the same name.
-
-```bash
-mkdir -p styles
-echo "Write with dry humor and British spelling." > styles/british-wit.md
-cmsbot generate "Write about queuing theory" --style british-wit
-```
-
-### Combining context + style
-
-Context and style compose naturally. Context defines *who you're writing for*, style defines *how you write*:
-
-```bash
-cmsbot generate "Write about our new API launch" \
+./run.sh generate "Write a blog post about lead routing mistakes" \
   --type blog \
-  --context-file contexts/my-brand.md \
-  --style persuasive \
-  --budget 5.00 \
-  --max-rounds 3
+  --project-file projects/example-project.json \
+  --style persuasive
+
+./run.sh project init "Northstar CRM"
+./run.sh project context projects/example-project.json --output contexts/northstar-crm.md
+./run.sh project voice projects/example-project.json --output contexts/northstar-crm.voice.json
+
+./run.sh topics --project-file projects/example-project.json
+
+./run.sh export-blog-draft output/lead-routing-mistakes
+
+./run.sh seo research
+./run.sh seo evaluate
+
+./run.sh slideshow pipeline --project-file ../projects/example-project.json --batch
 ```
 
-### Python library
+## Project Contract
 
-```python
-import asyncio
-from cmsbot import AutoreasonPipeline, Config
-from cmsbot.context import build_enriched_prompt, load_context_file, load_style
+The stable contract between CMSBOT and a product repo is a project profile JSON file.
 
-config = Config.from_env()
-config.budget_cap = 5.00
-config.max_rounds = 3
-
-# Build enriched prompt with context and style
-context = load_context_file("contexts/my-brand.md")
-style = load_style("casual")
-task_prompt = build_enriched_prompt(
-    "Write a blog post about sustainable architecture",
-    context=context,
-    style=style,
-)
-
-pipeline = AutoreasonPipeline(config)
-result = asyncio.run(pipeline.run(
-    task_prompt=task_prompt,
-    content_type="blog",
-))
-
-# result.html          -> rendered HTML string
-# result.final_draft   -> winning Draft object
-# result.total_cost    -> actual USD spend
-# result.converged     -> whether streak=2 was reached
-# result.images        -> list of ImageSpec with file paths
-# result.rounds        -> per-round details (winner, cost, streak)
-```
-
-## Budget control
-
-Every API call is tracked with per-model token pricing. The pipeline checks affordability before each step and stops gracefully when the budget is exhausted.
+Reference shape:
 
 ```bash
-# Set a $5 cap
-cmsbot generate "..." --budget 5.00
-
-# Limit to 2 refinement rounds
-cmsbot generate "..." --max-rounds 2
+projects/example-project.json
 ```
 
-The `BudgetTracker` automatically signals when utilization exceeds 60%, allowing the pipeline to downgrade to cheaper models.
+The project profile carries product-specific inputs such as:
 
-## Project structure
+- brand voice and content rules
+- SEO seed keywords, competitors, analytics config, and blog API URL
+- slideshow voice, CTA variants, and screenshot references
 
-```
-src/cmsbot/
-  __init__.py          # Exports AutoreasonPipeline, Config
-  cli.py               # Click CLI (generate, check, models, styles)
-  pipeline.py          # Autoreason orchestration loop
-  config.py            # Environment/provider configuration
-  context.py           # Context file + style loading, prompt enrichment
-  budget.py            # Token cost tracking and budget enforcement
-  models.py            # Data models (Draft, Critique, PipelineResult, etc.)
-  renderer.py          # Jinja2 HTML rendering
-  templates/           # HTML templates (blog.html, social.html)
-  styles/              # Built-in writing style presets
-  agents/
-    author.py          # Initial draft writer
-    strawman.py        # Adversarial critic
-    candidates.py      # Rewriter + Synthesizer agents
-    judge.py           # Blind judge panel with Borda count
-    images.py          # Image planning + DALL-E generation
-  providers/
-    __init__.py        # build_provider() factory
-    base.py            # LLMProvider abstract base
-    anthropic.py       # Claude provider
-    openai_provider.py # GPT + OpenAI-compatible provider
-    gemini.py          # Gemini provider
-contexts/              # User context files (brand voice, audience, guidelines)
+Product repos can also add local context files, style overrides, curated topic briefs, screenshots, and publish adapters without changing the CMSBOT core.
+
+## Repo Layout
+
+```text
+src/cmsbot/         Python package and CLI
+projects/           Example project profiles
+contexts/           Optional generated or hand-authored markdown contexts
+seo/                Node-based SEO research and evaluation toolkit
+slideshow/          Short-form content repurposing pipeline
+scripts/bootstrap.sh
+run.sh              Repo-level entrypoint
 ```
 
-## License
+## Notes
 
-MIT
+- Keep project credentials, unpublished outputs, and private screenshots local and out of git.
+- `cmsbot export-blog-draft` produces a portable artifact. Product repos are responsible for uploading images, rewriting URLs, inserting drafts, or posting to their CMS.
+- `seo/` reads `CMSBOT_PROJECT_FILE` when set, so the same tooling can be reused across projects without copying code.

@@ -57,6 +57,8 @@ def _markdown_to_html(content: str, images: list[ImageSpec]) -> str:
     html_parts: list[str] = []
     in_list = False
     in_code_block = False
+    in_table = False
+    table_headers: list[str] = []
     section_count = 0
 
     for line in lines:
@@ -81,6 +83,38 @@ def _markdown_to_html(content: str, images: list[ImageSpec]) -> str:
         if in_list and not stripped.startswith(("- ", "* ", "1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.")):
             html_parts.append("</ul>")
             in_list = False
+
+        # Table rows (lines starting and ending with |)
+        if stripped.startswith("|") and stripped.endswith("|"):
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+
+            # Separator row (|---|---|) — skip it, we already emitted <thead>
+            if all(re.match(r'^:?-+:?$', c) for c in cells):
+                continue
+
+            if not in_table:
+                # First row of a new table — treat as header
+                in_table = True
+                table_headers = cells
+                html_parts.append('<table>')
+                html_parts.append('<thead><tr>')
+                for cell in cells:
+                    html_parts.append(f'<th>{_inline_format(cell)}</th>')
+                html_parts.append('</tr></thead>')
+                html_parts.append('<tbody>')
+            else:
+                # Body row
+                html_parts.append('<tr>')
+                for cell in cells:
+                    html_parts.append(f'<td>{_inline_format(cell)}</td>')
+                html_parts.append('</tr>')
+            continue
+
+        # Close table if we were in one and this line isn't a table row
+        if in_table:
+            html_parts.append('</tbody></table>')
+            in_table = False
+            table_headers = []
 
         # Empty line
         if not stripped:
@@ -142,6 +176,8 @@ def _markdown_to_html(content: str, images: list[ImageSpec]) -> str:
 
     if in_list:
         html_parts.append("</ul>")
+    if in_table:
+        html_parts.append('</tbody></table>')
     if in_code_block:
         html_parts.append("</code></pre>")
 
