@@ -37,9 +37,29 @@ HOOK_PROMPT_PATH = SCRIPT_DIR / "prompts" / "hook_generation.md"
 OUTPUT_DIR = Path(os.getenv("CMSBOT_SLIDESHOW_OUTPUT_DIR", str(SCRIPT_DIR / "output")))
 PROCESSED_LOG = SCRIPT_DIR / ".processed_slugs.json"
 
-def load_config():
-    with open(CONFIG_PATH) as f:
+
+def load_json_file(path: Path) -> dict:
+    with open(path) as f:
         return json.load(f)
+
+
+def optional_override_path(env_var: str) -> Path | None:
+    raw = os.getenv(env_var, "").strip()
+    if not raw:
+        return None
+
+    path = Path(raw).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"{env_var} does not exist: {path}")
+    return path
+
+
+def load_config():
+    config = load_json_file(CONFIG_PATH)
+    override_path = optional_override_path("CMSBOT_SLIDESHOW_CONFIG_FILE")
+    if override_path is not None:
+        config = merge_dicts(config, load_json_file(override_path))
+    return config
 
 
 def merge_dicts(base: dict, override: dict) -> dict:
@@ -80,7 +100,8 @@ def config_from_project(project_file: str | None) -> dict:
     return merge_dicts(config, overrides)
 
 def load_hook_prompt():
-    with open(HOOK_PROMPT_PATH) as f:
+    hook_path = optional_override_path("CMSBOT_SLIDESHOW_HOOK_PROMPT_FILE") or HOOK_PROMPT_PATH
+    with open(hook_path) as f:
         return f.read()
 
 # ---------------------------------------------------------------------------

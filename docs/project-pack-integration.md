@@ -1,0 +1,191 @@
+# CMSBOT Project Pack Integration
+
+This guide shows how to use CMSBOT from another product repo without copying the core pipelines into that repo.
+
+## Target Layout
+
+Each product repo should own two layers:
+
+- shared core: a pinned checkout of the standalone CMSBOT repo
+- project pack: tracked product-specific files in the product repo
+
+Suggested layout:
+
+```text
+repo/
+├── marketing/cmsbot/
+│   ├── project.json
+│   ├── core.lock
+│   ├── contexts/
+│   ├── styles/
+│   ├── topic-briefs/
+│   ├── slideshow/
+│   ├── screenshots/
+│   └── adapters/
+├── scripts/cmsbot
+└── .tooling/cmsbot/core/        # ignored bootstrap checkout
+```
+
+## What Belongs In The Product Repo
+
+Keep these in the product repo:
+
+- `marketing/cmsbot/project.json`
+- local context files and style overrides
+- curated topic briefs
+- screenshot assets and visual references
+- product-specific publish adapters
+- fixture data and adapter tests
+
+Do not keep these in the product repo:
+
+- the shared `src/cmsbot/` package
+- the shared `seo/` toolkit
+- the shared `slideshow/` scripts
+- duplicated Python virtualenvs or nested CMSBOT git clones
+
+## Minimal Project Pack Files
+
+### `project.json`
+
+This is the main contract consumed by the core. It should define:
+
+- brand identity and audience
+- voice and content rules
+- SEO seeds, competitors, analytics identifiers, and blog base URL
+- slideshow CTA variants, banned words, screenshot refs, and platform list
+
+Reference the example schema in [`projects/example-project.json`](../projects/example-project.json).
+
+### `core.lock`
+
+Pin the core repo URL, commit SHA, and local bootstrap checkout dir. Example:
+
+```bash
+CMSBOT_CORE_REPO_URL=https://github.com/ZuchGuillotine/CMSBOT.git
+CMSBOT_CORE_REF=<commit-sha>
+CMSBOT_CORE_DIR=.tooling/cmsbot/core
+```
+
+### `contexts/` and `styles/`
+
+Use these for repo-specific editorial rules and tone presets. The wrapper can export:
+
+- `CMSBOT_STYLE_DIRS=/abs/path/to/marketing/cmsbot/styles`
+- `--context-file marketing/cmsbot/contexts/editorial.md`
+
+### `topic-briefs/`
+
+Use `topic-briefs/curated.json` for manually approved ideas that should be merged with the SEO evaluator output.
+
+### `slideshow/`
+
+Use this folder for advanced slideshow behavior that is too specific for the shared default config:
+
+- `slideshow/config.json`
+- `slideshow/hook_generation.md`
+
+The wrapper should export these when present:
+
+- `CMSBOT_SLIDESHOW_CONFIG_FILE`
+- `CMSBOT_SLIDESHOW_HOOK_PROMPT_FILE`
+- `CMSBOT_SLIDESHOW_SCREENSHOTS_DIR`
+- `CMSBOT_SLIDESHOW_OUTPUT_DIR`
+
+### `adapters/`
+
+Adapters stay local because they are not portable. Typical examples:
+
+- upload generated images to S3 or another asset store
+- rewrite local image refs to public URLs
+- insert or publish `blog_draft.json` into the product CMS
+- use bastions, cookies, service auth, or direct database writes
+
+## Wrapper Script
+
+Add a single `scripts/cmsbot` wrapper in each repo. The wrapper should:
+
+1. Read `marketing/cmsbot/core.lock`.
+2. Ensure the pinned core checkout exists at `.tooling/cmsbot/core`.
+3. Bootstrap the core when `.venv` or `seo/node_modules` are missing.
+4. Export project-pack env vars.
+5. Forward commands into the shared core.
+
+A practical env export set looks like this:
+
+```bash
+export CMSBOT_PROJECT_FILE="$PACK_DIR/project.json"
+export CMSBOT_STYLE_DIRS="$PACK_DIR/styles"
+export CMSBOT_OUTPUT_DIR="$PACK_DIR/output"
+export CMSBOT_SEO_OUTPUT_DIR="$PACK_DIR/output/seo"
+export CMSBOT_SLIDESHOW_OUTPUT_DIR="$PACK_DIR/output/slideshow"
+export CMSBOT_SLIDESHOW_CONFIG_FILE="$PACK_DIR/slideshow/config.json"
+export CMSBOT_SLIDESHOW_HOOK_PROMPT_FILE="$PACK_DIR/slideshow/hook_generation.md"
+export CMSBOT_SLIDESHOW_SCREENSHOTS_DIR="$PACK_DIR/screenshots"
+```
+
+The wrapper should be the only supported entrypoint inside the product repo.
+
+## Typical Commands
+
+```bash
+scripts/cmsbot bootstrap
+scripts/cmsbot generate "Write about magnesium timing"
+scripts/cmsbot topics
+scripts/cmsbot seo research
+scripts/cmsbot seo evaluate
+scripts/cmsbot slideshow specs --blog-file marketing/cmsbot/output/my-post/index.html
+scripts/cmsbot export-blog-draft marketing/cmsbot/output/my-post
+scripts/cmsbot publish-blog-draft marketing/cmsbot/output/my-post
+scripts/cmsbot insert-blog-draft marketing/cmsbot/output/my-post --dry-run
+```
+
+## Portable Artifacts
+
+The shared core should only emit portable artifacts:
+
+- generated HTML output
+- `blog_draft.json`
+- `topic_briefs_*.json`
+- slideshow spec JSON
+- `review.html`
+- generated image folders
+
+Adapters in the product repo are responsible for turning those artifacts into product-specific side effects.
+
+## Migration Checklist For Existing Repos
+
+1. Move brand and SEO defaults into `marketing/cmsbot/project.json`.
+2. Move editorial instructions into `marketing/cmsbot/contexts/` and `marketing/cmsbot/styles/`.
+3. Move advanced slideshow prompt/config data into `marketing/cmsbot/slideshow/`.
+4. Move CMS publish, S3 upload, DB insert, and auth logic into `marketing/cmsbot/adapters/`.
+5. Replace direct calls to local SEO or slideshow scripts with `scripts/cmsbot ...`.
+6. Mark old in-repo tool copies as legacy.
+7. Delete the old copies after any unique assets or docs are migrated.
+
+## Validation Checklist
+
+After integration, verify all of these from the product repo:
+
+```bash
+scripts/cmsbot styles
+scripts/cmsbot project context marketing/cmsbot/project.json
+scripts/cmsbot topics
+scripts/cmsbot seo research
+scripts/cmsbot seo evaluate
+scripts/cmsbot slideshow specs --blog-file marketing/cmsbot/output/example/index.html
+scripts/cmsbot export-blog-draft marketing/cmsbot/output/example
+```
+
+Then test the local adapters separately, preferably with a fixture-backed test for `blog_draft.json`.
+
+## What To Remove From Product Repos
+
+Once the wrapper path is working, remove:
+
+- duplicated `seo/` trees
+- duplicated `slideshow/` trees
+- nested CMSBOT git clones
+- old tool virtualenvs and local runtime outputs
+
+Keep only the project pack, wrapper, adapter tests, and the ignored bootstrap checkout under `.tooling/`.

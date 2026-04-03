@@ -25,7 +25,9 @@ from typing import Optional
 SCRIPT_DIR = Path(__file__).parent
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 TEMPLATES_DIR = SCRIPT_DIR / "prompts" / "image_json_templates"
-SCREENSHOTS_DIR = SCRIPT_DIR / "screenshots"
+SCREENSHOTS_DIR = Path(
+    os.getenv("CMSBOT_SLIDESHOW_SCREENSHOTS_DIR", str(SCRIPT_DIR / "screenshots"))
+).expanduser()
 
 
 def load_config():

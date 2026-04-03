@@ -123,6 +123,8 @@ CMSBOT standardizes these portable artifacts:
 
 Product repos can add local context files, style overrides, curated topic briefs, screenshots, and publish adapters without changing the CMSBOT core.
 
+See [`docs/project-pack-integration.md`](./docs/project-pack-integration.md) for the repo-by-repo integration guide and wrapper example.
+
 ## SEO Workflow
 
 ```bash
@@ -150,6 +152,7 @@ Set `CMSBOT_SEO_OUTPUT_DIR` if a wrapper wants SEO artifacts written somewhere o
 Add project screenshots to `slideshow/screenshots/` when a spec references `app_screenshot`.
 
 Set `CMSBOT_SLIDESHOW_OUTPUT_DIR` if a wrapper wants slideshow artifacts written somewhere other than `slideshow/output`.
+Set `CMSBOT_SLIDESHOW_CONFIG_FILE`, `CMSBOT_SLIDESHOW_HOOK_PROMPT_FILE`, and `CMSBOT_SLIDESHOW_SCREENSHOTS_DIR` when a product repo needs pack-specific slideshow behavior without forking the core pipeline.
 
 ## Configuration
 

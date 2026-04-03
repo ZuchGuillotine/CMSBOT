@@ -11,6 +11,15 @@ export ANTHROPIC_API_KEY=...
 export GOOGLE_API_KEY=...
 ```
 
+Optional project-pack overrides:
+
+```bash
+export CMSBOT_SLIDESHOW_CONFIG_FILE=/path/to/marketing/cmsbot/slideshow/config.json
+export CMSBOT_SLIDESHOW_HOOK_PROMPT_FILE=/path/to/marketing/cmsbot/slideshow/hook_generation.md
+export CMSBOT_SLIDESHOW_SCREENSHOTS_DIR=/path/to/marketing/cmsbot/screenshots
+export CMSBOT_SLIDESHOW_OUTPUT_DIR=/path/to/marketing/cmsbot/output/slideshow
+```
+
 Optional project profile:
 
 ```bash
@@ -39,4 +48,4 @@ The pipeline produces:
 - post-processed assets
 - `review.html` for manual approval
 
-Add project screenshots to `slideshow/screenshots/` when a spec references `app_screenshot`.
+If a product repo exports `CMSBOT_SLIDESHOW_SCREENSHOTS_DIR`, app-screenshot slides will use that directory instead of the core repo's `slideshow/screenshots/` folder.
