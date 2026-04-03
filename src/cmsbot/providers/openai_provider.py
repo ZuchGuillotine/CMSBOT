@@ -63,8 +63,11 @@ class OpenAIProvider(LLMProvider):
         prompt: str,
         output_path: Path,
         size: str = "1024x1024",
+        placement: str = "section",
     ) -> float:
-        """Generate an image with DALL-E 3 and save to output_path. Returns cost."""
+        """Generate an image with DALL-E 3, post-process, and save as JPEG. Returns cost."""
+        from cmsbot.postprocess import postprocess_blog_image
+
         response = await self._client.images.generate(
             model="dall-e-3",
             prompt=prompt,
@@ -75,7 +78,15 @@ class OpenAIProvider(LLMProvider):
 
         image_data = base64.b64decode(response.data[0].b64_json)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(image_data)
+
+        # Save raw PNG temporarily, then post-process to JPEG
+        raw_path = output_path.with_name(output_path.stem + ".raw.png")
+        try:
+            raw_path.write_bytes(image_data)
+            final_path = output_path.with_suffix(".jpg")
+            postprocess_blog_image(raw_path, final_path, placement=placement)
+        finally:
+            raw_path.unlink(missing_ok=True)
 
         return DALLE_COSTS.get(size, 0.04)
 

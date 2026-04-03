@@ -6,6 +6,13 @@ from importlib import resources
 from pathlib import Path
 
 
+def _style_name_from_path(path: Path) -> str:
+    """Normalize a style filename into its public style name."""
+    if path.name.endswith(".local.md"):
+        return path.name[: -len(".local.md")]
+    return path.stem
+
+
 def get_styles_dir() -> Path:
     """Return the path to the built-in styles directory."""
     return Path(resources.files("cmsbot") / "styles")  # type: ignore[arg-type]
@@ -17,13 +24,13 @@ def list_styles() -> list[str]:
 
     # Built-in styles shipped with the package
     for f in get_styles_dir().glob("*.md"):
-        styles.add(f.stem)
+        styles.add(_style_name_from_path(f))
 
     # User styles in local ./styles/ directory
     local = Path("styles")
     if local.is_dir():
         for f in local.glob("*.md"):
-            styles.add(f.stem)
+            styles.add(_style_name_from_path(f))
 
     return sorted(styles)
 
@@ -31,9 +38,13 @@ def list_styles() -> list[str]:
 def load_style(name: str) -> str:
     """Load a style preset by name. Checks local ./styles/ first, then built-in."""
     # Local override takes priority
-    local = Path("styles") / f"{name}.md"
-    if local.is_file():
-        return local.read_text(encoding="utf-8").strip()
+    local_dir = Path("styles")
+    for candidate in (
+        local_dir / f"{name}.local.md",
+        local_dir / f"{name}.md",
+    ):
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8").strip()
 
     # Built-in
     builtin = get_styles_dir() / f"{name}.md"

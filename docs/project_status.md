@@ -14,12 +14,13 @@ CMSBOT is a multi-agent content refinement pipeline built on the **Autoreason pa
 |---------|--------|-------|
 | Autoreason loop | Done | Author → Strawman → Rewrite/Synthesize → Blind Judges → Convergence |
 | Anthropic provider (Claude) | Done | Claude Sonnet 4.6 for authoring and rewriting |
-| OpenAI provider (GPT + DALL-E) | Done | GPT-5.4 Mini for synthesis, DALL-E 3 for images |
+| OpenAI provider (GPT + DALL-E) | Done | GPT-5.4 Mini for synthesis, DALL-E 3 fallback for images |
 | Gemini provider | Done | Gemini 3 Flash for critique, uses `google-genai` SDK |
 | OpenAI-compatible provider | Done | Qwen 3.5 via OpenRouter |
 | Budget tracking | Done | Per-call token + cost tracking, $75 default cap, utilization warnings |
 | Blind judge panel | Done | 3 independent judges, Borda count ranking, shuffled candidates |
-| Image generation | Done | AI art director agent plans images, DALL-E 3 generates them |
+| Multi-provider image generation | Done | AI art director plans images, Grok/Nano Banana/Unsplash/DALL-E generate candidates, ImageJudge picks winner |
+| Image post-processing | Done | Editorial photo grading, grain, vignette, chromatic aberration, JPEG compression |
 | Blog HTML template | Done | Responsive, dark mode, OG/Twitter cards, serif typography |
 | Social HTML template | Done | Dark theme, platform card layout |
 | CLI (`cmsbot`) | Done | `generate`, `check`, `models` commands via Click + Rich |
@@ -30,7 +31,7 @@ CMSBOT is a multi-agent content refinement pipeline built on the **Autoreason pa
 
 - Prompt: "Write a short blog post about why multi-agent AI systems produce better content than single-model approaches"
 - Settings: 2 rounds, $5 budget
-- Results: **$0.27 total cost** (5.3% of budget), 14 API calls, 3 DALL-E images, fully styled HTML output
+- Results: **$0.27 total cost** (5.3% of budget), 14 API calls, 3 generated images, fully styled HTML output
 - Round 1: B (rewrite) won, Round 2: A (previous winner) won — streak=1, did not converge in 2 rounds
 
 ### Architecture
@@ -47,13 +48,16 @@ src/cmsbot/
 │   ├── base.py         # Abstract LLMProvider interface
 │   ├── anthropic.py    # Claude (AsyncAnthropic)
 │   ├── openai_provider.py  # GPT + DALL-E + OpenAI-compatible (Qwen, etc.)
+│   ├── image_providers.py  # Grok, Nano Banana, Unsplash, DALL-E wrappers
 │   └── gemini.py       # Gemini (google-genai SDK)
 ├── agents/
 │   ├── author.py       # Author A — writes initial draft
 │   ├── strawman.py     # Adversarial critic — problems only, no fixes
 │   ├── candidates.py   # B·rewrite and AB·synthesize generators
 │   ├── judge.py        # Blind judge panel with Borda count
-│   └── images.py       # Image director + DALL-E generation
+│   ├── image_judge.py  # Vision-capable judge for candidate image selection
+│   └── images.py       # Image director + multi-candidate generation flow
+├── postprocess.py      # Blog image realism pass (grade, grain, lens artifacts)
 └── templates/
     ├── blog.html       # Production blog template (responsive, dark mode, OG tags)
     └── social.html     # Social media content pack template
@@ -71,7 +75,7 @@ src/cmsbot/
 | Judge 2 | OpenAI | GPT-5.4 Mini | Provider diversity reduces bias |
 | Judge 3 | Gemini | Gemini 3 Flash | Provider diversity reduces bias |
 | Image Director | OpenAI | GPT-5.4 Mini | Plans image needs for the content |
-| Image Generation | OpenAI | DALL-E 3 | Best image quality |
+| Image Generation | Mixed | Grok Imagine + Nano Banana + Unsplash + DALL-E fallback | Candidate set judged for naturalness |
 
 ---
 
@@ -83,7 +87,7 @@ src/cmsbot/
 - [ ] **Role assignment CLI/config** — Add a `cmsbot config` command or YAML config file so role-to-provider mappings can be changed without editing code
 - [ ] **Budget-aware model downgrading** — When `budget.should_downgrade()` returns True (>60% utilization), automatically swap expensive models for cheaper alternatives mid-pipeline
 - [ ] **Error handling and retries** — Add retry with exponential backoff for transient API failures (rate limits, timeouts)
-- [ ] **Unsplash/Pexels stock photo support** — Add fetching option alongside DALL-E generation for the image director's "fetch" method
+- [ ] **Image provider tuning** — Refine provider ordering, prompt specialization, and retry policy as real-world results accumulate
 
 ### Medium Priority
 
@@ -137,6 +141,8 @@ pip install -e /path/to/CMSBOT
 # GEMINI_API_Key=AIza...
 # OPENAI_COMPAT_API_KEY=sk-or-...       # OpenRouter key for Qwen
 # OPENAI_COMPAT_BASE_URL=https://openrouter.ai/api/v1
+# XAI_API_KEY=xai-...                   # Grok Imagine image generation
+# UNSPLASH_ACCESS_KEY=...               # Optional real-photo source
 
 # 4. Generate content
 cmsbot generate "Your content prompt here"

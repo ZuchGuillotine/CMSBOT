@@ -131,7 +131,7 @@ def strip_html(html: str) -> str:
 # Claude API Integration
 # ---------------------------------------------------------------------------
 
-def call_claude(system_prompt: str, user_prompt: str, model: str = "claude-sonnet-4-20250514") -> str:
+def call_claude(system_prompt: str, user_prompt: str, model: str = "claude-sonnet-4-6") -> str:
     """Call the Anthropic Claude API. Requires ANTHROPIC_API_KEY env var."""
     try:
         import anthropic

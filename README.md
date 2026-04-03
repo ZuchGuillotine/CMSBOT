@@ -103,7 +103,11 @@ OpenAI_API_Key=
 GEMINI_API_Key=
 OPENAI_COMPAT_API_KEY=
 OPENAI_COMPAT_BASE_URL=https://api.together.xyz/v1
+XAI_API_KEY=
+UNSPLASH_ACCESS_KEY=
 ```
+
+For blog image generation, CMSBOT will use any configured combination of Grok Imagine, Nano Banana, Unsplash, and DALL-E fallback, then run an image judge to pick the most natural-looking candidate.
 
 ## Repo layout
 
