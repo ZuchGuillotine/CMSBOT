@@ -1,14 +1,4 @@
-"""Image Director — plans images, generates candidates from multiple providers, and judges them.
-
-Flow per image slot:
-    1. Director LLM decides what images the content needs (same as before)
-    2. For each image slot, generate up to 3 candidates in parallel:
-       - GrokImagine (xAI)
-       - Nano Banana (Gemini)
-       - Unsplash (real photos) OR DALL-E (fallback)
-    3. ImageJudge picks the most natural-looking candidate
-    4. Winner is post-processed and saved
-"""
+"""Image Director — plans visuals, routes photo vs. diagram generation, and judges raster candidates."""
 
 from __future__ import annotations
 
@@ -18,62 +8,112 @@ import re
 from pathlib import Path
 
 from cmsbot.agents.image_judge import ImageJudge
+from cmsbot.agents.svg_diagrams import SvgDiagramGenerator, SvgSectionContext
 from cmsbot.budget import BudgetTracker
 from cmsbot.models import ContentType, ImageCandidate, ImageSpec, LLMResponse
 from cmsbot.providers.base import LLMProvider
 from cmsbot.providers.image_providers import ImageProvider
 
 SYSTEM = """\
-You are an art director for digital content. Given finalized content, decide what images it needs.
+You are an art director for digital content. Given finalized content, decide what visuals it needs.
 
 For a blog post, typically:
-- 1 hero image (wide, atmospheric, sets the tone)
-- 1-3 section images (illustrate key points)
+- 1 hero image (wide, atmospheric, sets the tone, always photographic)
+- 1-3 section visuals
 
 For social media:
-- 1 hero image (square or 4:5 ratio, eye-catching, shareable)
+- 1 hero image (square or 4:5 ratio, eye-catching, shareable, always photographic)
 
-For each image, provide:
-- "description": A detailed visual description (what the viewer sees — composition, mood, colors, style)
+For each visual, provide:
+- "description": What the viewer should understand at a glance
 - "alt_text": Accessible alt text for screen readers
-- "placement": Where it goes — "hero", "section-1", "section-2", etc.
-- "search_query": A concise Unsplash-style search query (2-5 words, concrete subjects)
-- "gen_prompt": A detailed prompt for AI image generation, written as PHOTOGRAPHIC direction
+- "placement": "hero", "section-1", "section-2", etc.
+- "method": One of "fetch", "generate", or "diagram"
+- "search_query": A concise photo-search query for real photography when method is "fetch"
+- "gen_prompt": A detailed prompt for AI image generation when method is "generate"
 
-RULES:
-- Output ONLY a JSON array of image objects
-- Keep gen_prompt visual — avoid text in images
-- Hero images should be evocative, not literal
-- Be tasteful — no cheesy stock photo vibes
-- Write gen_prompt as editorial/documentary photography direction:
-  mention camera type, lens, focal length, aperture, lighting setup, and depth of field
-- Use photographic language: "shot on", "natural light", "shallow depth of field", "f/1.8"
-- Avoid "illustration", "digital art", "concept art", "3D render" — always lean photographic
-- Describe slight imperfections: slightly off-center framing, natural lighting variation
-- Never describe text overlays or watermarks in the image
-- search_query should be simple and concrete — "morning supplements kitchen", not long descriptions"""
+Routing rules:
+- "fetch" for concrete real-world scenes that can be satisfied by a photo search
+- "generate" for concrete custom photography with no visible wording
+- "diagram" for workflows, comparisons, architectures, timelines, frameworks, taxonomies, or abstract concepts that would need multiple words or labels
 
-
-# ---------------------------------------------------------------------------
-# Camera-realistic prompt suffixes
-# ---------------------------------------------------------------------------
+Hard rules:
+- Hero must never use "diagram"
+- Keep photographic prompts visual and brand-safe
+- Photo prompts must forbid visible words, numbers, labels, dashboards, screenshots, whiteboards, posters, book covers, packaging fronts, documents, signage, charts, tables, and UI chrome
+- search_query must stay simple, concrete, and photo-searchable
+- Never describe text overlays or watermarks in an image
+- Output ONLY a JSON array of visual objects
+"""
 
 BLOG_HERO_CAMERA_SUFFIX = (
     " Shot on a mirrorless camera (Sony A7 IV, 35mm f/1.8 lens). Editorial photography"
     " style. Natural window light, slightly warm color temperature. Slight lift in"
     " shadows, gentle highlight rolloff, warm midtones. Shallow depth of field with"
     " soft background blur. Clean composition, professional but not sterile. No stock"
-    " photo poses, no perfect symmetry, no text, no watermarks, no logos. Slight"
-    " natural imperfections. The image should feel like it belongs in a well-designed"
-    " online health magazine."
+    " photo poses, no perfect symmetry, no text, no numbers, no labels, no charts, no"
+    " dashboards, no screenshots, no whiteboards, no posters, no packaging fronts, no"
+    " documents, no signage, no UI chrome, no watermarks, no logos. Slight natural"
+    " imperfections. The image should feel like it belongs in a well-designed online"
+    " magazine."
 )
 
 BLOG_SECTION_CAMERA_SUFFIX = (
     " Shot on a mirrorless camera or high-end phone camera. Mix of editorial and"
     " product photography. Natural lighting, slightly warm tones. Lifted shadows,"
     " gentle highlights, warm midtones. Clean background, professional but"
-    " approachable. No stock photo cliches, no text in image, no watermarks, no"
+    " approachable. No stock photo cliches, no text, no numbers, no labels, no"
+    " dashboards, no screenshots, no whiteboards, no posters, no packaging fronts, no"
+    " documents, no signage, no charts, no tables, no UI chrome, no watermarks, no"
     " logos. Authentic feel with slight imperfections."
+)
+
+TEXT_RISK_KEYWORDS = (
+    "abstract",
+    "architecture",
+    "chart",
+    "comparison",
+    "dashboard",
+    "diagram",
+    "document",
+    "flowchart",
+    "framework",
+    "graph",
+    "interface",
+    "labels",
+    "poster",
+    "screen",
+    "screenshot",
+    "signage",
+    "steps",
+    "table",
+    "taxonomy",
+    "text",
+    "timeline",
+    "ui",
+    "workflow",
+)
+
+PHOTO_UNSAFE_KEYWORDS = (
+    "book cover",
+    "chart",
+    "dashboard",
+    "diagram",
+    "document",
+    "flowchart",
+    "graph",
+    "labels",
+    "numbers",
+    "packaging",
+    "poster",
+    "screen",
+    "screenshot",
+    "signage",
+    "table",
+    "text",
+    "ui",
+    "whiteboard",
+    "words",
 )
 
 
@@ -84,19 +124,27 @@ def _enhance_prompt_for_realism(description: str, placement: str) -> str:
 
 
 class ImageDirector:
-    """Plans images, generates candidates from multiple providers, and picks the best."""
+    """Plans visuals, routes generation, and picks the safest usable asset."""
 
     def __init__(
         self,
         director_provider: LLMProvider,
-        image_providers: list[ImageProvider],
+        raster_image_providers: list[ImageProvider],
+        fetch_provider: ImageProvider | None,
         judge: ImageJudge,
         budget: BudgetTracker,
+        svg_provider: LLMProvider | None = None,
+        svg_fallback_provider: LLMProvider | None = None,
     ):
         self.director = director_provider
-        self.image_providers = image_providers
+        self.raster_image_providers = raster_image_providers
+        self.fetch_provider = fetch_provider
         self.judge = judge
         self.budget = budget
+        self.svg_generator = SvgDiagramGenerator(
+            primary_provider=svg_provider,
+            fallback_provider=svg_fallback_provider,
+        )
 
     async def generate_images(
         self,
@@ -106,11 +154,10 @@ class ImageDirector:
         output_dir: Path,
         log_fn=None,
     ) -> tuple[list[ImageSpec], list[LLMResponse]]:
-        """Plan and generate images with multi-candidate judging."""
+        """Plan and generate visuals with method-aware routing."""
         log = log_fn or (lambda msg: None)
         responses: list[LLMResponse] = []
 
-        # Step 1: Have the director decide what images are needed
         user_prompt = f"""\
 CONTENT TYPE: {content_type.value}
 
@@ -120,7 +167,7 @@ ORIGINAL TASK:
 FINAL CONTENT:
 {final_content}
 
-What images does this content need? Output a JSON array."""
+What visuals does this content need? Output a JSON array."""
 
         director_response = await self.director.generate_simple(
             user_prompt=user_prompt,
@@ -130,50 +177,117 @@ What images does this content need? Output a JSON array."""
         )
         responses.append(director_response)
 
-        specs = _parse_image_specs(director_response.content)
+        specs = _apply_text_risk_guard(
+            _parse_image_specs(director_response.content),
+            content_type=content_type,
+        )
 
-        # Step 2: For each spec, generate candidates and judge
         images_dir = output_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
 
         generated_specs: list[ImageSpec] = []
         for spec in specs:
-            # Budget check — estimate worst-case cost for candidates + judge
-            estimated_cost = len(self.image_providers) * 0.10 + 0.02  # images + judge call
-            if not self.budget.can_afford(estimated_cost):
-                log(f"  Budget low — skipping {spec.placement}")
-                break
-
-            filename = f"{spec.placement}.jpg"
-            output_path = images_dir / filename
-            spec.file_path = f"images/{filename}"
-
-            size = "1792x1024" if spec.placement == "hero" else "1024x1024"
-            gen_prompt = _enhance_prompt_for_realism(spec.description, spec.placement)
-
-            try:
-                winner_bytes = await self._generate_and_judge(
-                    gen_prompt=gen_prompt,
-                    search_query=spec.search_query or spec.alt_text,
-                    size=size,
-                    placement=spec.placement,
-                    log=log,
-                )
-
-                # Post-process and save the winner
-                from cmsbot.postprocess import postprocess_blog_image_bytes
-                postprocess_blog_image_bytes(
-                    winner_bytes, output_path, placement=spec.placement
-                )
-
-            except Exception as e:
-                log(f"  [WARN] Image generation failed for {spec.placement}: {e}")
-                spec.file_path = ""
+            if _should_skip_text_heavy_hero(spec):
+                log(f"  [SKIP] {spec.placement}: hero visual would require text-heavy treatment")
                 continue
 
-            generated_specs.append(spec)
+            estimated_cost = self._estimate_slot_cost(spec)
+            if not self.budget.can_afford(estimated_cost):
+                log(f"  Budget low — skipping {spec.placement}")
+                continue
+
+            if spec.method == "diagram":
+                try:
+                    filename = f"{spec.placement}.svg"
+                    output_path = images_dir / filename
+                    section_context = _extract_section_context(final_content, spec.placement)
+                    svg_markup, svg_responses = await self.svg_generator.generate(spec, section_context)
+                    output_path.write_text(svg_markup, encoding="utf-8")
+                    spec.file_path = f"images/{filename}"
+                    generated_specs.append(spec)
+                    responses.extend(svg_responses)
+                    log(f"  {spec.placement}: generated SVG diagram")
+                except Exception as exc:
+                    log(f"  [WARN] Diagram generation failed for {spec.placement}: {exc}")
+                    spec.file_path = ""
+                continue
+
+            try:
+                filename = f"{spec.placement}.jpg"
+                output_path = images_dir / filename
+                image_bytes = await self._resolve_raster_bytes(spec, log)
+                if image_bytes is None:
+                    log(f"  [SKIP] {spec.placement}: no acceptable raster candidate")
+                    continue
+
+                from cmsbot.postprocess import postprocess_blog_image_bytes
+
+                postprocess_blog_image_bytes(
+                    image_bytes,
+                    output_path,
+                    placement=spec.placement,
+                )
+                spec.file_path = f"images/{filename}"
+                generated_specs.append(spec)
+            except Exception as exc:
+                log(f"  [WARN] Image generation failed for {spec.placement}: {exc}")
+                spec.file_path = ""
 
         return generated_specs, responses
+
+    def _estimate_slot_cost(self, spec: ImageSpec) -> float:
+        """Estimate the cost of generating a single visual."""
+        if spec.method == "diagram":
+            return 0.03
+        if spec.method == "fetch" and self.fetch_provider is not None:
+            return 0.01
+        return max(0.02, len(self.raster_image_providers) * 0.10 + 0.02)
+
+    async def _resolve_raster_bytes(
+        self,
+        spec: ImageSpec,
+        log,
+    ) -> bytes | None:
+        """Resolve a raster image via fetch or generation."""
+        size = "1792x1024" if spec.placement == "hero" else "1024x1024"
+
+        if spec.method == "fetch":
+            image_bytes = await self._fetch_photo(spec, size=size, log=log)
+            if image_bytes is not None:
+                return image_bytes
+            log(f"    fetch fallback: degrading {spec.placement} to generated photography")
+
+        gen_prompt = _enhance_prompt_for_realism(spec.description or spec.alt_text, spec.placement)
+        return await self._generate_and_judge(
+            gen_prompt=gen_prompt,
+            search_query=spec.search_query or spec.alt_text,
+            size=size,
+            placement=spec.placement,
+            log=log,
+        )
+
+    async def _fetch_photo(
+        self,
+        spec: ImageSpec,
+        size: str,
+        log,
+    ) -> bytes | None:
+        """Fetch a real photograph without invoking the judge."""
+        if self.fetch_provider is None:
+            return None
+
+        query = spec.search_query or _fallback_search_query(spec)
+        if not query:
+            return None
+
+        try:
+            result = await self.fetch_provider.generate(prompt=query, size=size)
+            self.budget.image_cost += result.cost
+            log(f"    {self.fetch_provider.name}: fetched ({result.model})")
+            return result.image_bytes
+        except Exception as exc:
+            log(f"    {self.fetch_provider.name}: failed ({exc})")
+            return None
 
     async def _generate_and_judge(
         self,
@@ -182,14 +296,12 @@ What images does this content need? Output a JSON array."""
         size: str,
         placement: str,
         log,
-    ) -> bytes:
-        """Generate candidates from all providers in parallel, then judge."""
+    ) -> bytes | None:
+        """Generate raster candidates from configured providers, then judge them."""
 
         async def _try_provider(provider: ImageProvider) -> ImageCandidate | None:
             try:
-                # Unsplash uses search_query, generators use gen_prompt
-                prompt = search_query if provider.name == "unsplash" else gen_prompt
-                result = await provider.generate(prompt=prompt, size=size)
+                result = await provider.generate(prompt=gen_prompt, size=size)
                 self.budget.image_cost += result.cost
                 log(f"    {provider.name}: generated ({result.model})")
                 return ImageCandidate(
@@ -199,26 +311,19 @@ What images does this content need? Output a JSON array."""
                     cost=result.cost,
                     placement=placement,
                 )
-            except Exception as e:
-                log(f"    {provider.name}: failed ({e})")
+            except Exception as exc:
+                log(f"    {provider.name}: failed ({exc})")
                 return None
 
-        # Generate from all providers in parallel
-        results = await asyncio.gather(
-            *[_try_provider(p) for p in self.image_providers]
-        )
-        candidates = [r for r in results if r is not None]
+        if not self.raster_image_providers:
+            raise RuntimeError("No raster image providers configured")
 
+        results = await asyncio.gather(*[_try_provider(provider) for provider in self.raster_image_providers])
+        candidates = [candidate for candidate in results if candidate is not None]
         if not candidates:
-            raise RuntimeError("All image providers failed")
+            raise RuntimeError(f"All raster providers failed for '{search_query[:60]}'")
 
-        # If only one candidate succeeded, use it directly (no judge needed)
-        if len(candidates) == 1:
-            log(f"    Only 1 candidate — using {candidates[0].provider} directly")
-            return candidates[0].image_bytes
-
-        # Run the judge
-        log(f"    Judging {len(candidates)} candidates...")
+        log(f"    Judging {len(candidates)} raster candidate(s)...")
         judgment, judge_response = await self.judge.evaluate(candidates)
         self.budget.record(
             "image_judge",
@@ -228,24 +333,23 @@ What images does this content need? Output a JSON array."""
             judge_response.output_tokens,
         )
 
+        if judgment.winner_index is None:
+            log(f"    No acceptable raster winner ({judgment.reasoning})")
+            return None
+
         winner = candidates[judgment.winner_index]
         log(
             f"    Winner: {winner.provider} "
             f"(scores: {judgment.scores}, reason: {judgment.reasoning[:80]})"
         )
-
         return winner.image_bytes
 
-
-# ---------------------------------------------------------------------------
-# Parsing helpers
-# ---------------------------------------------------------------------------
 
 def _parse_image_specs(text: str) -> list[ImageSpec]:
     """Parse image specifications from LLM output."""
     text = text.strip()
 
-    match = re.search(r'\[.*\]', text, re.DOTALL)
+    match = re.search(r"\[.*\]", text, re.DOTALL)
     if match:
         try:
             data = json.loads(match.group())
@@ -253,11 +357,14 @@ def _parse_image_specs(text: str) -> list[ImageSpec]:
                 specs = []
                 for item in data:
                     if isinstance(item, dict):
+                        method = str(item.get("method", "generate")).strip().lower() or "generate"
+                        if method not in {"fetch", "generate", "diagram"}:
+                            method = "generate"
                         spec = ImageSpec(
-                            description=item.get("gen_prompt", item.get("dalle_prompt", item.get("description", ""))),
+                            description=item.get("description", item.get("gen_prompt", item.get("dalle_prompt", ""))),
                             alt_text=item.get("alt_text", ""),
                             placement=item.get("placement", f"section-{len(specs) + 1}"),
-                            method=item.get("method", "generate"),
+                            method=method,
                             search_query=item.get("search_query", ""),
                         )
                         specs.append(spec)
@@ -265,10 +372,122 @@ def _parse_image_specs(text: str) -> list[ImageSpec]:
         except json.JSONDecodeError:
             pass
 
-    # Fallback: generate a single hero image
-    return [ImageSpec(
-        description="An atmospheric, evocative image related to the content theme",
-        alt_text="Article hero image",
-        placement="hero",
-        method="generate",
-    )]
+    return [
+        ImageSpec(
+            description="An atmospheric, evocative image related to the content theme",
+            alt_text="Article hero image",
+            placement="hero",
+            method="generate",
+        )
+    ]
+
+
+def _apply_text_risk_guard(
+    specs: list[ImageSpec],
+    content_type: ContentType,
+) -> list[ImageSpec]:
+    """Force text-heavy blog sections into diagrams and keep hero visuals photographic."""
+    guarded_specs: list[ImageSpec] = []
+    for spec in specs:
+        method = spec.method.strip().lower() or "generate"
+        if method not in {"fetch", "generate", "diagram"}:
+            method = "generate"
+
+        if content_type != ContentType.BLOG and method == "diagram":
+            method = "generate"
+
+        if spec.placement == "hero" and method == "diagram":
+            method = "generate"
+
+        if _is_text_heavy_visual(spec):
+            if spec.placement != "hero" and content_type == ContentType.BLOG:
+                method = "diagram"
+            elif method == "diagram":
+                method = "generate"
+
+        spec.method = method
+        guarded_specs.append(spec)
+
+    return guarded_specs
+
+
+def _is_text_heavy_visual(spec: ImageSpec) -> bool:
+    """Return True when the visual concept is better served as a diagram."""
+    haystack = " ".join(
+        [
+            spec.description.lower(),
+            spec.alt_text.lower(),
+            spec.search_query.lower(),
+        ]
+    )
+    return any(keyword in haystack for keyword in TEXT_RISK_KEYWORDS)
+
+
+def _should_skip_text_heavy_hero(spec: ImageSpec) -> bool:
+    """Skip hero visuals whose concept still relies on wording-heavy imagery."""
+    if spec.placement != "hero":
+        return False
+    return _is_text_heavy_visual(spec) or _contains_photo_unsafe_terms(spec.description)
+
+
+def _contains_photo_unsafe_terms(text: str) -> bool:
+    haystack = text.lower()
+    return any(keyword in haystack for keyword in PHOTO_UNSAFE_KEYWORDS)
+
+
+def _fallback_search_query(spec: ImageSpec) -> str:
+    """Derive a simple concrete photo-search query from alt text or description."""
+    source = spec.search_query or spec.alt_text or spec.description
+    cleaned = re.sub(r"[^a-zA-Z0-9\s]", " ", source).lower()
+    words = [word for word in cleaned.split() if len(word) > 2]
+    return " ".join(words[:5])
+
+
+def _extract_section_context(final_content: str, placement: str) -> SvgSectionContext:
+    """Extract the relevant markdown section for a diagram visual."""
+    match = re.match(r"section-(\d+)", placement)
+    sections = _split_markdown_sections(final_content)
+    if match:
+        index = int(match.group(1)) - 1
+        if 0 <= index < len(sections):
+            return sections[index]
+
+    if sections:
+        return sections[0]
+
+    excerpt = "\n".join(line.strip() for line in final_content.splitlines() if line.strip())[:800]
+    return SvgSectionContext(heading="Article summary", body=excerpt)
+
+
+def _split_markdown_sections(final_content: str) -> list[SvgSectionContext]:
+    """Split markdown-ish blog content into top-level sections matching renderer image placement."""
+    sections: list[SvgSectionContext] = []
+    heading: str | None = None
+    body_lines: list[str] = []
+
+    for raw_line in final_content.splitlines():
+        line = raw_line.strip()
+        if line.startswith("## "):
+            if heading is not None:
+                sections.append(
+                    SvgSectionContext(
+                        heading=heading,
+                        body="\n".join(body_lines).strip(),
+                    )
+                )
+            heading = line[3:].strip()
+            body_lines = []
+            continue
+
+        if heading is not None:
+            body_lines.append(raw_line)
+
+    if heading is not None:
+        sections.append(
+            SvgSectionContext(
+                heading=heading,
+                body="\n".join(body_lines).strip(),
+            )
+        )
+
+    return sections

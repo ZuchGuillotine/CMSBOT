@@ -56,7 +56,7 @@ class ImageSpec:
     description: str
     alt_text: str
     placement: str  # "hero", "section-1", "section-2", etc.
-    method: str  # "generate" or "fetch"
+    method: str  # "generate", "fetch", or "diagram"
     search_query: str = ""
     file_path: str = ""  # Filled after generation/fetch
 
@@ -69,6 +69,16 @@ class ImageCandidate:
     model: str
     cost: float
     placement: str
+
+
+@dataclass
+class ImageCandidateAssessment:
+    """Judge assessment for a single raster image candidate."""
+    red_flags: list[str]
+    strengths: list[str]
+    score: int
+    disqualified: bool = False
+    disqualification_reason: str = ""
 
 
 @dataclass

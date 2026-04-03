@@ -12,16 +12,17 @@ import json
 import re
 from dataclasses import dataclass
 
-from cmsbot.models import ImageCandidate, LLMResponse
+from cmsbot.models import ImageCandidate, ImageCandidateAssessment, LLMResponse
 from cmsbot.providers.base import LLMProvider
 
 
 @dataclass
 class ImageJudgment:
     """Result of an image quality judgment."""
-    winner_index: int  # 0-indexed into the candidates list
+    winner_index: int | None  # 0-indexed into the candidates list
     reasoning: str
     scores: list[int]  # 1-10 naturalness score per candidate
+    assessments: list[ImageCandidateAssessment]
     provider: str
     model: str
 
@@ -81,20 +82,35 @@ You will receive 3 candidate images labeled A, B, and C. Evaluate each on these 
 
 ## YOUR TASK
 
-For each candidate (A, B, C):
+For each candidate:
 1. List specific AI-generation red flags you observe (or note their absence)
 2. Give a naturalness score from 1-10 (10 = indistinguishable from a real photo)
+3. Mark `disqualified=true` if the image has distorted, nonsensical, or unnecessary visible text,
+   labels, signage, UI chrome, dashboards, screenshots, or other wording-heavy artifacts that would
+   make it unusable in a brand-safe blog post. Also disqualify catastrophic anatomy or physics failures.
 
-Then pick the WINNER — the image with the highest naturalness score.
+Then pick the WINNER — the highest-scoring candidate that is not disqualified.
+If every candidate is disqualified, set `"winner": null`.
 
 ## OUTPUT FORMAT
 
 Output ONLY valid JSON in this exact format:
 {
   "analysis": {
-    "A": {"red_flags": ["flag1", "flag2"], "strengths": ["strength1"], "score": 7},
-    "B": {"red_flags": ["flag1"], "strengths": ["strength1", "strength2"], "score": 8},
-    "C": {"red_flags": ["flag1", "flag2", "flag3"], "strengths": ["strength1"], "score": 5}
+    "A": {
+      "red_flags": ["flag1", "flag2"],
+      "strengths": ["strength1"],
+      "score": 7,
+      "disqualified": false,
+      "disqualification_reason": ""
+    },
+    "B": {
+      "red_flags": ["flag1"],
+      "strengths": ["strength1", "strength2"],
+      "score": 8,
+      "disqualified": false,
+      "disqualification_reason": ""
+    }
   },
   "winner": "B",
   "reasoning": "One sentence explaining your choice"
@@ -121,36 +137,13 @@ class ImageJudge:
         """
         labels = ["A", "B", "C"][:len(candidates)]
 
-        # Build multimodal message with images
-        content_parts: list[dict] = [
-            {
-                "type": "text",
-                "text": (
-                    f"Evaluate these {len(candidates)} candidate images for a blog post. "
-                    "Pick the one that looks most like a real photograph and least like "
-                    "an AI-generated image. Output ONLY the JSON format specified in your instructions."
-                ),
-            },
-        ]
-
-        for i, candidate in enumerate(candidates):
-            b64 = base64.b64encode(candidate.image_bytes).decode()
-            # Detect mime type from first bytes
-            mime = "image/jpeg"
-            if candidate.image_bytes[:4] == b"\x89PNG":
-                mime = "image/png"
-
-            content_parts.append({
-                "type": "text",
-                "text": f"\n--- Candidate {labels[i]} (from {candidate.provider}) ---",
-            })
-            content_parts.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime};base64,{b64}"},
-            })
-
-        # Use the provider's generate method with vision content
-        messages = [{"role": "user", "content": content_parts}]
+        prompt = (
+            f"Evaluate these {len(candidates)} candidate images for a blog post. "
+            "Pick the one that looks most like a real photograph and least like an "
+            "AI-generated image. Distorted or unnecessary visible text is a fatal issue. "
+            "Output ONLY the JSON format specified in your instructions."
+        )
+        messages = _build_messages_for_provider(self.provider.name, candidates, labels, prompt)
         response = await self.provider.generate(
             messages=messages,
             system_prompt=SYSTEM,
@@ -160,6 +153,59 @@ class ImageJudge:
 
         judgment = _parse_judgment(response.content, labels, response.provider, response.model)
         return judgment, response
+
+
+def _build_messages_for_provider(
+    provider_name: str,
+    candidates: list[ImageCandidate],
+    labels: list[str],
+    prompt: str,
+) -> list[dict]:
+    """Build provider-specific multimodal messages for image evaluation."""
+    if provider_name == "anthropic":
+        content_parts: list[dict] = [{"type": "text", "text": prompt}]
+        for i, candidate in enumerate(candidates):
+            b64 = base64.b64encode(candidate.image_bytes).decode()
+            mime = "image/jpeg"
+            if candidate.image_bytes[:4] == b"\x89PNG":
+                mime = "image/png"
+            content_parts.append(
+                {
+                    "type": "text",
+                    "text": f"Candidate {labels[i]} (from {candidate.provider})",
+                }
+            )
+            content_parts.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime,
+                        "data": b64,
+                    },
+                }
+            )
+        return [{"role": "user", "content": content_parts}]
+
+    content_parts: list[dict] = [{"type": "text", "text": prompt}]
+    for i, candidate in enumerate(candidates):
+        b64 = base64.b64encode(candidate.image_bytes).decode()
+        mime = "image/jpeg"
+        if candidate.image_bytes[:4] == b"\x89PNG":
+            mime = "image/png"
+        content_parts.append(
+            {
+                "type": "text",
+                "text": f"\n--- Candidate {labels[i]} (from {candidate.provider}) ---",
+            }
+        )
+        content_parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime};base64,{b64}"},
+            }
+        )
+    return [{"role": "user", "content": content_parts}]
 
 
 def _parse_judgment(
@@ -176,22 +222,34 @@ def _parse_judgment(
     if json_match:
         try:
             data = json.loads(json_match.group())
-            winner_label = data.get("winner", "A").upper()
+            winner_value = data.get("winner")
             reasoning = data.get("reasoning", "")
 
             # Extract scores
             analysis = data.get("analysis", {})
             scores = []
+            assessments: list[ImageCandidateAssessment] = []
             for label in labels:
                 entry = analysis.get(label, {})
-                scores.append(entry.get("score", 5))
+                score = int(entry.get("score", 5))
+                scores.append(score)
+                assessments.append(
+                    ImageCandidateAssessment(
+                        red_flags=list(entry.get("red_flags", [])),
+                        strengths=list(entry.get("strengths", [])),
+                        score=score,
+                        disqualified=bool(entry.get("disqualified", False)),
+                        disqualification_reason=str(entry.get("disqualification_reason", "")),
+                    )
+                )
 
-            winner_index = labels.index(winner_label) if winner_label in labels else 0
+            winner_index = _resolve_winner_index(winner_value, labels, assessments, scores)
 
             return ImageJudgment(
                 winner_index=winner_index,
                 reasoning=reasoning,
                 scores=scores,
+                assessments=assessments,
                 provider=provider,
                 model=model,
             )
@@ -205,6 +263,10 @@ def _parse_judgment(
                 winner_index=i,
                 reasoning="Parsed from partial output",
                 scores=[5] * len(labels),
+                assessments=[
+                    ImageCandidateAssessment(red_flags=[], strengths=[], score=5)
+                    for _ in labels
+                ],
                 provider=provider,
                 model=model,
             )
@@ -214,6 +276,31 @@ def _parse_judgment(
         winner_index=0,
         reasoning="Could not parse judge output — defaulting to first candidate",
         scores=[5] * len(labels),
+        assessments=[
+            ImageCandidateAssessment(red_flags=[], strengths=[], score=5)
+            for _ in labels
+        ],
         provider=provider,
         model=model,
     )
+
+
+def _resolve_winner_index(
+    winner_value: str | None,
+    labels: list[str],
+    assessments: list[ImageCandidateAssessment],
+    scores: list[int],
+) -> int | None:
+    """Resolve the winning index while respecting disqualifications."""
+    eligible_indices = [i for i, assessment in enumerate(assessments) if not assessment.disqualified]
+    if not eligible_indices:
+        return None
+
+    if isinstance(winner_value, str):
+        winner_label = winner_value.upper()
+        if winner_label in labels:
+            winner_index = labels.index(winner_label)
+            if not assessments[winner_index].disqualified:
+                return winner_index
+
+    return max(eligible_indices, key=lambda idx: scores[idx])
