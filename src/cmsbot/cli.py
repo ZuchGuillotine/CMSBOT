@@ -290,7 +290,7 @@ def check():
 @main.command()
 def styles():
     """List available writing style presets."""
-    from cmsbot.context import get_styles_dir
+    from cmsbot.context import get_local_style_dirs, get_styles_dir
 
     available = list_styles()
     if not available:
@@ -303,16 +303,26 @@ def styles():
     table.add_column("Preview")
 
     builtin_dir = get_styles_dir()
-    local_dir = Path("styles")
+    local_dirs = get_local_style_dirs()
 
     for name in available:
         # Determine source
-        local_path = local_dir / f"{name}.md"
-        if local_path.is_file():
-            source = "[cyan]local[/cyan] (./styles/)"
-            text = local_path.read_text(encoding="utf-8").strip()
-        else:
-            source = "[dim]built-in[/dim]"
+        text = None
+        source = "[dim]built-in[/dim]"
+
+        for local_dir in local_dirs:
+            for local_path in (
+                local_dir / f"{name}.local.md",
+                local_dir / f"{name}.md",
+            ):
+                if local_path.is_file():
+                    source = f"[cyan]local[/cyan] ({local_dir})"
+                    text = local_path.read_text(encoding="utf-8").strip()
+                    break
+            if text is not None:
+                break
+
+        if text is None:
             text = (builtin_dir / f"{name}.md").read_text(encoding="utf-8").strip()
 
         # First line as preview
