@@ -50,22 +50,50 @@ BLOG_HERO_CAMERA_SUFFIX = (
     " Shot on a mirrorless camera (Sony A7 IV, 35mm f/1.8 lens). Editorial photography"
     " style. Natural window light, slightly warm color temperature. Slight lift in"
     " shadows, gentle highlight rolloff, warm midtones. Shallow depth of field with"
-    " soft background blur. Clean composition, professional but not sterile. No stock"
-    " photo poses, no perfect symmetry, no text, no numbers, no labels, no charts, no"
-    " dashboards, no screenshots, no whiteboards, no posters, no packaging fronts, no"
-    " documents, no signage, no UI chrome, no watermarks, no logos. Slight natural"
-    " imperfections. The image should feel like it belongs in a well-designed online"
-    " magazine."
+    " soft background blur. Clean composition, professional but not sterile. The image"
+    " should feel like it belongs in a well-designed online magazine."
 )
 
 BLOG_SECTION_CAMERA_SUFFIX = (
     " Shot on a mirrorless camera or high-end phone camera. Mix of editorial and"
     " product photography. Natural lighting, slightly warm tones. Lifted shadows,"
     " gentle highlights, warm midtones. Clean background, professional but"
-    " approachable. No stock photo cliches, no text, no numbers, no labels, no"
-    " dashboards, no screenshots, no whiteboards, no posters, no packaging fronts, no"
-    " documents, no signage, no charts, no tables, no UI chrome, no watermarks, no"
-    " logos. Authentic feel with slight imperfections."
+    " approachable. Authentic feel with slight imperfections."
+)
+
+PHOTO_NEGATIVE_SUFFIX = (
+    " No stock photo poses, no stock photo cliches, no perfect symmetry, no text, no"
+    " numbers, no labels, no charts, no dashboards, no screenshots, no whiteboards,"
+    " no posters, no packaging fronts, no documents, no signage, no tables, no UI"
+    " chrome, no watermarks, no logos."
+)
+
+ANTI_AI_REALISM_VARIANTS = (
+    (
+        " Subtle sensor grain, faint chromatic aberration on a few high-contrast edges,"
+        " and slightly imperfect clarity like a lightly upscaled 720p editorial web"
+        " photo. Keep it natural, not degraded."
+    ),
+    (
+        " Preserve visible skin texture and pores when people are present, a few stray"
+        " hairs or flyaways, natural fabric wrinkles, and small facial asymmetries."
+        " Nothing airbrushed or overly polished."
+    ),
+    (
+        " Add minor handheld realism: tiny focus falloff, slightly imperfect framing,"
+        " candid timing, and micro-variations in posture or object placement. Avoid"
+        " posed stock-photo stiffness."
+    ),
+    (
+        " Keep real-world surface imperfections where plausible: faint dust, tiny"
+        " scuffs, mild reflection irregularities, lived-in surfaces, and subtle edge"
+        " softness rather than hyper-clean CGI sharpness."
+    ),
+    (
+        " Let the scene retain small capture flaws: gentle grain in the midtones,"
+        " minimal lens softness, slight exposure inconsistency, and realistic material"
+        " texture in skin, hair, wood, fabric, or metal."
+    ),
 )
 
 TEXT_RISK_KEYWORDS = (
@@ -117,10 +145,11 @@ PHOTO_UNSAFE_KEYWORDS = (
 )
 
 
-def _enhance_prompt_for_realism(description: str, placement: str) -> str:
-    """Append camera-specific language to push generation toward photorealistic output."""
+def _enhance_prompt_for_realism(description: str, placement: str, variant_index: int) -> str:
+    """Append camera-specific language and rotating anti-AI realism cues."""
     suffix = BLOG_HERO_CAMERA_SUFFIX if placement == "hero" else BLOG_SECTION_CAMERA_SUFFIX
-    return description + suffix
+    realism_variant = ANTI_AI_REALISM_VARIANTS[variant_index % len(ANTI_AI_REALISM_VARIANTS)]
+    return description + suffix + realism_variant + PHOTO_NEGATIVE_SUFFIX
 
 
 class ImageDirector:
@@ -186,6 +215,7 @@ What visuals does this content need? Output a JSON array."""
         images_dir.mkdir(parents=True, exist_ok=True)
 
         generated_specs: list[ImageSpec] = []
+        generated_slot_index = 0
         for spec in specs:
             if _should_skip_text_heavy_hero(spec):
                 log(f"  [SKIP] {spec.placement}: hero visual would require text-heavy treatment")
@@ -215,7 +245,11 @@ What visuals does this content need? Output a JSON array."""
             try:
                 filename = f"{spec.placement}.jpg"
                 output_path = images_dir / filename
-                image_bytes = await self._resolve_raster_bytes(spec, log)
+                image_bytes = await self._resolve_raster_bytes(
+                    spec,
+                    log,
+                    variant_index=generated_slot_index,
+                )
                 if image_bytes is None:
                     log(f"  [SKIP] {spec.placement}: no acceptable raster candidate")
                     continue
@@ -229,6 +263,7 @@ What visuals does this content need? Output a JSON array."""
                 )
                 spec.file_path = f"images/{filename}"
                 generated_specs.append(spec)
+                generated_slot_index += 1
             except Exception as exc:
                 log(f"  [WARN] Image generation failed for {spec.placement}: {exc}")
                 spec.file_path = ""
@@ -247,6 +282,7 @@ What visuals does this content need? Output a JSON array."""
         self,
         spec: ImageSpec,
         log,
+        variant_index: int,
     ) -> bytes | None:
         """Resolve a raster image via fetch or generation."""
         size = "1792x1024" if spec.placement == "hero" else "1024x1024"
@@ -257,7 +293,11 @@ What visuals does this content need? Output a JSON array."""
                 return image_bytes
             log(f"    fetch fallback: degrading {spec.placement} to generated photography")
 
-        gen_prompt = _enhance_prompt_for_realism(spec.description or spec.alt_text, spec.placement)
+        gen_prompt = _enhance_prompt_for_realism(
+            spec.description or spec.alt_text,
+            spec.placement,
+            variant_index,
+        )
         return await self._generate_and_judge(
             gen_prompt=gen_prompt,
             search_query=spec.search_query or spec.alt_text,

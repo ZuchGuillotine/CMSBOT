@@ -7,7 +7,12 @@ import types
 import pytest
 
 from cmsbot.agents.image_judge import ImageJudgment, _parse_judgment
-from cmsbot.agents.images import ImageDirector, _apply_text_risk_guard, _parse_image_specs
+from cmsbot.agents.images import (
+    ImageDirector,
+    _apply_text_risk_guard,
+    _enhance_prompt_for_realism,
+    _parse_image_specs,
+)
 from cmsbot.agents.svg_diagrams import (
     SvgDiagramGenerator,
     SvgSectionContext,
@@ -185,6 +190,15 @@ def test_text_risk_guard_routes_sections_to_diagram_but_keeps_hero_photographic(
 
     assert guarded[0].method == "generate"
     assert guarded[1].method == "diagram"
+
+
+def test_enhance_prompt_for_realism_rotates_anti_ai_variants():
+    hero_prompt = _enhance_prompt_for_realism("Editorial founder portrait", "hero", 0)
+    section_prompt = _enhance_prompt_for_realism("Office collaboration scene", "section-1", 1)
+
+    assert "720p editorial web photo" in hero_prompt
+    assert "visible skin texture and pores" in section_prompt
+    assert hero_prompt != section_prompt
 
 
 def test_parse_judgment_returns_none_when_all_candidates_are_disqualified():
@@ -401,6 +415,63 @@ async def test_generate_method_respects_judge_disqualification(fake_postprocess,
     assert images == []
     assert judge.calls == 1
     assert all(len(provider.calls) == 1 for provider in raster_providers)
+
+
+@pytest.mark.asyncio
+async def test_generate_slots_rotate_anti_ai_prompt_profiles(fake_postprocess, tmp_path):
+    director_provider = StubLLMProvider(
+        [
+            json.dumps(
+                [
+                    {
+                        "description": "A candid founder portrait in a studio office",
+                        "alt_text": "Founder portrait",
+                        "placement": "hero",
+                        "method": "generate",
+                    },
+                    {
+                        "description": "A team working around a laptop in a bright office",
+                        "alt_text": "Team collaboration",
+                        "placement": "section-1",
+                        "method": "generate",
+                    },
+                ]
+            )
+        ],
+        name="director",
+    )
+    raster_provider = StubImageProvider("grok", image_bytes=b"generated-photo")
+    judge = StubJudge(
+        ImageJudgment(
+            winner_index=0,
+            reasoning="Looks natural",
+            scores=[8],
+            assessments=[_make_assessment()],
+            provider="judge",
+            model="judge-model",
+        )
+    )
+
+    director = ImageDirector(
+        director_provider=director_provider,
+        raster_image_providers=[raster_provider],
+        fetch_provider=None,
+        judge=judge,
+        budget=BudgetTracker(cap=10.0),
+    )
+
+    images, _ = await director.generate_images(
+        task_prompt="Write about lead routing",
+        final_content="## Routing\nExplain routing.\n\n## Handoff\nExplain handoff.",
+        content_type=ContentType.BLOG,
+        output_dir=tmp_path,
+    )
+
+    assert [image.file_path for image in images] == ["images/hero.jpg", "images/section-1.jpg"]
+    assert len(raster_provider.calls) == 2
+    assert "720p editorial web photo" in raster_provider.calls[0]["prompt"]
+    assert "visible skin texture and pores" in raster_provider.calls[1]["prompt"]
+    assert raster_provider.calls[0]["prompt"] != raster_provider.calls[1]["prompt"]
 
 
 @pytest.mark.asyncio
