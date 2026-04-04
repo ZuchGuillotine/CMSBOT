@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-generate_images.py — Generate AI lifestyle images via Nano Banana Pro (Google Gemini).
+generate_images.py — Generate slideshow images via pluggable AI image providers.
 
 Reads slideshow specs and generates images for slides that need AI-generated content.
 App screenshots are skipped (you provide those manually).
@@ -10,24 +10,41 @@ Usage:
   python generate_images.py --spec output/batch_2026-04-01/stack-mistakes-v1_slideshows.json
   python generate_images.py --prompt-only  # Just output prompts, don't call API
 
-Requires: GOOGLE_API_KEY environment variable for Gemini API access.
+Supported providers:
+  - gemini (Nano Banana / Gemini image generation)
+  - grok (xAI Grok Imagine)
+  - dalle (OpenAI DALL-E)
 """
 
 import argparse
-import base64
+import asyncio
 import json
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from shutil import copy2
 
 SCRIPT_DIR = Path(__file__).parent
+SRC_DIR = SCRIPT_DIR.parent / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from cmsbot.screenshots import load_manifest, resolve_screenshot_ref
+from cmsbot.config import Config
+from cmsbot.providers.image_providers import (
+    DalleImageProvider,
+    GrokImageProvider,
+    ImageProvider,
+    NanobananProvider,
+)
+
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 TEMPLATES_DIR = SCRIPT_DIR / "prompts" / "image_json_templates"
 SCREENSHOTS_DIR = Path(
     os.getenv("CMSBOT_SLIDESHOW_SCREENSHOTS_DIR", str(SCRIPT_DIR / "screenshots"))
 ).expanduser()
+DEFAULT_IMAGE_PROVIDER = os.getenv("CMSBOT_SLIDESHOW_IMAGE_PROVIDER", "gemini")
 
 
 def load_config():
@@ -144,7 +161,7 @@ SCENE_TEMPLATES = {
 
 
 def build_full_prompt(scene_key: str, custom_subject: str = None) -> dict:
-    """Build a complete Nano Banana Pro JSON prompt from a scene template."""
+    """Build a scene prompt object from a slideshow scene template."""
     if scene_key not in SCENE_TEMPLATES:
         # Default to kitchen supplements
         scene_key = "kitchen_supplements"
@@ -155,6 +172,49 @@ def build_full_prompt(scene_key: str, custom_subject: str = None) -> dict:
         template["subject"]["description"] = custom_subject
 
     return template
+
+
+def render_gemini_prompt(prompt_json: dict) -> str:
+    """Render the structured slideshow prompt for Gemini-style image generation."""
+    text_prompt = json.dumps(prompt_json, indent=2)
+    return f"""Generate a photorealistic image based on this specification.
+The image should look like it was taken with a phone camera, not AI-generated.
+Follow every detail in the JSON exactly:
+
+{text_prompt}
+
+CRITICAL: The image must look like a candid phone photo, NOT an AI render.
+No text, watermarks, or logos in the image. Portrait orientation (9:16 aspect ratio)."""
+
+
+def render_natural_language_prompt(prompt_json: dict) -> str:
+    """Render the same scene prompt as direct natural language for Grok or DALL-E."""
+    subject = prompt_json.get("subject", {})
+    lighting = prompt_json.get("lighting", {})
+    palette = prompt_json.get("color_palette", {})
+    negative_constraints = ", ".join(prompt_json.get("negative_constraints", []))
+
+    return (
+        "Create a photorealistic vertical lifestyle image for a social-media slideshow. "
+        f"Subject: {subject.get('description', 'person in a natural scene')}. "
+        f"Expression: {subject.get('expression', 'natural')}. "
+        f"Clothing: {subject.get('clothing', 'casual everyday clothing')}. "
+        f"Context: {prompt_json.get('context', 'authentic real-life moment')}. "
+        f"Background: {prompt_json.get('background', 'real environment with shallow depth of field')}. "
+        f"Style: {prompt_json.get('style', 'candid phone photo')}. "
+        f"Composition: {prompt_json.get('composition', 'portrait 9:16 framing')}. "
+        f"Lighting: {lighting.get('source', 'natural light')}, "
+        f"{lighting.get('direction', 'soft side light')}, "
+        f"{lighting.get('quality', 'natural quality')}. "
+        f"Color treatment: {palette.get('restriction', 'natural muted colors')}; "
+        f"{palette.get('sensor_simulation', 'phone camera look')}; "
+        f"{palette.get('grade', 'gentle realistic color grade')}. "
+        f"Mood: {prompt_json.get('mood', 'authentic and relatable')}. "
+        "The result should feel captured, not assembled, with believable imperfections and real skin texture. "
+        "Avoid glossy commercial styling. "
+        f"Negative constraints: {negative_constraints}. "
+        "No text overlays, no logos, no watermarks."
+    )
 
 
 def image_note_to_scene(image_note: str) -> tuple[str, Optional[str]]:
@@ -198,59 +258,49 @@ def image_note_to_scene(image_note: str) -> tuple[str, Optional[str]]:
     return "kitchen_supplements", image_note
 
 
-# ---------------------------------------------------------------------------
-# Gemini API Integration (Nano Banana Pro)
-# ---------------------------------------------------------------------------
+def get_image_provider(provider_name: str) -> ImageProvider:
+    """Build a shared CMSBOT image provider for the slideshow pipeline."""
+    config = Config.from_env()
 
-def generate_image_gemini(prompt_json: dict, output_path: Path) -> bool:
-    """Generate an image using Google Gemini's image generation API."""
-    api_key = os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        print("[ERROR] GOOGLE_API_KEY not set")
-        return False
+    if provider_name == "gemini":
+        if not config.gemini:
+            raise ValueError("Gemini image provider requested but GEMINI_API_KEY is not configured")
+        return NanobananProvider(api_key=config.gemini.api_key)
 
+    if provider_name == "grok":
+        if not config.xai_key:
+            raise ValueError("Grok image provider requested but XAI_API_KEY is not configured")
+        return GrokImageProvider(api_key=config.xai_key)
+
+    if provider_name == "dalle":
+        if not config.openai:
+            raise ValueError("DALL-E image provider requested but OPENAI_API_KEY is not configured")
+        return DalleImageProvider(api_key=config.openai.api_key)
+
+    raise ValueError(f"Unsupported slideshow image provider: {provider_name}")
+
+
+def prompt_for_provider(provider_name: str, prompt_json: dict) -> str:
+    """Render a provider-specific prompt from the shared scene template."""
+    if provider_name == "gemini":
+        return render_gemini_prompt(prompt_json)
+    if provider_name in {"grok", "dalle"}:
+        return render_natural_language_prompt(prompt_json)
+    raise ValueError(f"Unsupported slideshow image provider: {provider_name}")
+
+
+async def generate_image(
+    provider: ImageProvider,
+    prompt: str,
+    output_path: Path,
+    size: str = "1024x1536",
+) -> bool:
+    """Generate an image with a shared provider and save the raw bytes."""
     try:
-        import google.generativeai as genai
-    except ImportError:
-        print("[ERROR] Install google-generativeai: pip install google-generativeai")
-        return False
-
-    genai.configure(api_key=api_key)
-
-    # Convert JSON prompt to a text prompt for Gemini
-    text_prompt = json.dumps(prompt_json, indent=2)
-    full_prompt = f"""Generate a photorealistic image based on this specification.
-The image should look like it was taken with a phone camera, not AI-generated.
-Follow every detail in the JSON exactly:
-
-{text_prompt}
-
-CRITICAL: The image must look like a candid phone photo, NOT an AI render.
-No text, watermarks, or logos in the image. Portrait orientation (9:16 aspect ratio)."""
-
-    try:
-        # Use Gemini with image generation capability
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")  # Or latest image-capable model
-        response = model.generate_content(
-            full_prompt,
-            generation_config=genai.GenerationConfig(
-                response_mime_type="image/jpeg",
-            ),
-        )
-
-        # Save the generated image
-        if response.candidates and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, "inline_data") and part.inline_data:
-                    image_data = base64.b64decode(part.inline_data.data)
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(output_path, "wb") as f:
-                        f.write(image_data)
-                    return True
-
-        print(f"  [WARN] No image in response for {output_path.name}")
-        return False
-
+        result = await provider.generate(prompt, size=size)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(result.image_bytes)
+        return True
     except Exception as e:
         print(f"  [ERROR] Image generation failed: {e}")
         return False
@@ -260,12 +310,24 @@ No text, watermarks, or logos in the image. Portrait orientation (9:16 aspect ra
 # Batch Processing
 # ---------------------------------------------------------------------------
 
-def process_spec_file(spec_path: Path, prompt_only: bool = False) -> dict:
+def process_spec_file(
+    spec_path: Path,
+    prompt_only: bool = False,
+    provider_name: str = DEFAULT_IMAGE_PROVIDER,
+) -> dict:
     """Process a slideshow spec file and generate images for AI slides."""
     with open(spec_path) as f:
         specs = json.load(f)
 
-    results = {"generated": 0, "skipped_screenshot": 0, "errors": 0, "prompts": []}
+    manifest = load_manifest(SCREENSHOTS_DIR)
+    results = {
+        "generated": 0,
+        "resolved_screenshot": 0,
+        "fallback_ai": 0,
+        "errors": 0,
+        "prompts": [],
+    }
+    provider = None if prompt_only else get_image_provider(provider_name)
 
     for show in specs.get("slideshows", []):
         show_id = show["id"]
@@ -290,36 +352,51 @@ def process_spec_file(spec_path: Path, prompt_only: bool = False) -> dict:
             output_path = images_dir / filename
 
             if img_type == "app_screenshot":
-                # Check if screenshot exists in library
                 ref = slide.get("screenshot_ref", "")
-                screenshot_path = SCREENSHOTS_DIR / f"{ref}.png"
-                if screenshot_path.exists():
-                    # Copy screenshot to output
-                    from shutil import copy2
-                    copy2(screenshot_path, output_path)
-                    print(f"    Slide {num}: copied screenshot '{ref}'")
-                else:
-                    print(f"    Slide {num}: ⚠ SCREENSHOT NEEDED: '{ref}' → {SCREENSHOTS_DIR}/")
-                results["skipped_screenshot"] += 1
-                continue
+                resolved = resolve_screenshot_ref(ref, screenshot_dir=SCREENSHOTS_DIR, manifest=manifest)
+                if resolved and resolved.file.exists():
+                    screenshot_name = img_note.replace(" ", "_")[:30] or resolved.key
+                    screenshot_output = images_dir / f"{num:02d}_{screenshot_name}{resolved.file.suffix.lower()}"
+                    copy2(resolved.file, screenshot_output)
+                    print(
+                        f"    Slide {num}: copied screenshot '{resolved.key}' "
+                        f"({resolved.strategy}, {resolved.file.name})"
+                    )
+                    results["resolved_screenshot"] += 1
+                    continue
+
+                fallback_note = img_note or ref or "product in use"
+                print(
+                    f"    Slide {num}: ⚠ screenshot unresolved for '{ref}'. "
+                    f"Falling back to AI image."
+                )
+                img_note = fallback_note
+                results["fallback_ai"] += 1
 
             # AI image generation
             scene_key, custom_subject = image_note_to_scene(img_note)
-            prompt = build_full_prompt(scene_key, custom_subject)
+            prompt_template = build_full_prompt(scene_key, custom_subject)
+            prompt = prompt_for_provider(provider_name, prompt_template)
             results["prompts"].append({
                 "slideshow": show_id,
                 "slide": num,
+                "provider": provider_name,
                 "scene": scene_key,
                 "prompt": prompt,
+                "template": prompt_template,
                 "output": str(output_path),
             })
 
             if prompt_only:
-                print(f"    Slide {num}: [PROMPT] scene={scene_key}")
+                print(f"    Slide {num}: [PROMPT] provider={provider_name} scene={scene_key}")
                 continue
 
-            print(f"    Slide {num}: generating ({scene_key})...", end=" ", flush=True)
-            success = generate_image_gemini(prompt, output_path)
+            print(
+                f"    Slide {num}: generating ({provider_name}, {scene_key})...",
+                end=" ",
+                flush=True,
+            )
+            success = asyncio.run(generate_image(provider, prompt, output_path))
             if success:
                 print("✓")
                 results["generated"] += 1
@@ -330,7 +407,11 @@ def process_spec_file(spec_path: Path, prompt_only: bool = False) -> dict:
     return results
 
 
-def process_batch(batch_dir: Path, prompt_only: bool = False):
+def process_batch(
+    batch_dir: Path,
+    prompt_only: bool = False,
+    provider_name: str = DEFAULT_IMAGE_PROVIDER,
+):
     """Process all spec files in a batch directory."""
     batch_path = Path(batch_dir)
     spec_files = sorted(batch_path.glob("*_slideshows.json"))
@@ -341,11 +422,15 @@ def process_batch(batch_dir: Path, prompt_only: bool = False):
 
     print(f"Found {len(spec_files)} spec files in {batch_path.name}")
 
-    total = {"generated": 0, "skipped_screenshot": 0, "errors": 0, "prompts": []}
+    total = {"generated": 0, "resolved_screenshot": 0, "fallback_ai": 0, "errors": 0, "prompts": []}
 
     for spec_file in spec_files:
         print(f"\nProcessing: {spec_file.name}")
-        result = process_spec_file(spec_file, prompt_only=prompt_only)
+        result = process_spec_file(
+            spec_file,
+            prompt_only=prompt_only,
+            provider_name=provider_name,
+        )
         for key in total:
             if key == "prompts":
                 total["prompts"].extend(result["prompts"])
@@ -354,7 +439,8 @@ def process_batch(batch_dir: Path, prompt_only: bool = False):
 
     print(f"\n{'='*40}")
     print(f"Generated: {total['generated']} images")
-    print(f"Screenshots needed: {total['skipped_screenshot']}")
+    print(f"Screenshots copied: {total['resolved_screenshot']}")
+    print(f"Screenshot AI fallbacks: {total['fallback_ai']}")
     print(f"Errors: {total['errors']}")
 
     if prompt_only:
@@ -375,13 +461,27 @@ def main():
     group.add_argument("--spec", help="Process a single spec file")
     parser.add_argument("--prompt-only", action="store_true",
                         help="Only output prompts (don't call API)")
+    parser.add_argument(
+        "--provider",
+        default=DEFAULT_IMAGE_PROVIDER,
+        choices=["gemini", "grok", "dalle"],
+        help="Image provider to use for AI slideshow slides",
+    )
 
     args = parser.parse_args()
 
     if args.spec:
-        process_spec_file(Path(args.spec), prompt_only=args.prompt_only)
+        process_spec_file(
+            Path(args.spec),
+            prompt_only=args.prompt_only,
+            provider_name=args.provider,
+        )
     elif args.batch:
-        process_batch(args.batch, prompt_only=args.prompt_only)
+        process_batch(
+            args.batch,
+            prompt_only=args.prompt_only,
+            provider_name=args.provider,
+        )
 
 
 if __name__ == "__main__":

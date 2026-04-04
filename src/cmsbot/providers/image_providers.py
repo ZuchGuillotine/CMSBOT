@@ -10,12 +10,6 @@ from __future__ import annotations
 import base64
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from pathlib import Path
-
-import httpx
-import openai
-from google import genai
-from google.genai import types as genai_types
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +61,8 @@ class GrokImageProvider(ImageProvider):
     name = "grok"
 
     def __init__(self, api_key: str, model: str = "grok-imagine-image-pro"):
+        import openai
+
         self.model = model
         self._client = openai.AsyncOpenAI(
             api_key=api_key,
@@ -107,6 +103,8 @@ class NanobananProvider(ImageProvider):
     name = "nanobanana"
 
     def __init__(self, api_key: str, model: str = "gemini-3-pro-image-preview"):
+        from google import genai
+
         self.model = model
         self._client = genai.Client(api_key=api_key)
 
@@ -115,6 +113,8 @@ class NanobananProvider(ImageProvider):
         prompt: str,
         size: str = "1024x1024",
     ) -> ImageResult:
+        from google.genai import types as genai_types
+
         # Parse target dimensions from size string for the prompt
         w, h = (int(x) for x in size.split("x"))
         orientation = "landscape" if w > h else "portrait" if h > w else "square"
@@ -166,6 +166,8 @@ class UnsplashProvider(ImageProvider):
     name = "unsplash"
 
     def __init__(self, access_key: str):
+        import httpx
+
         self.access_key = access_key
         self._http = httpx.AsyncClient(
             headers={"Authorization": f"Client-ID {access_key}"},
@@ -237,6 +239,8 @@ class DalleImageProvider(ImageProvider):
     name = "dalle"
 
     def __init__(self, api_key: str, model: str = "dall-e-3"):
+        import openai
+
         self.model = model
         self._client = openai.AsyncOpenAI(api_key=api_key)
 

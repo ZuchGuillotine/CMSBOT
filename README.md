@@ -153,6 +153,8 @@ Add project screenshots to `slideshow/screenshots/` when a spec references `app_
 
 Set `CMSBOT_SLIDESHOW_OUTPUT_DIR` if a wrapper wants slideshow artifacts written somewhere other than `slideshow/output`.
 Set `CMSBOT_SLIDESHOW_CONFIG_FILE`, `CMSBOT_SLIDESHOW_HOOK_PROMPT_FILE`, and `CMSBOT_SLIDESHOW_SCREENSHOTS_DIR` when a product repo needs pack-specific slideshow behavior without forking the core pipeline.
+Set `CMSBOT_SLIDESHOW_PROVIDER`, `CMSBOT_SLIDESHOW_MODEL`, and `CMSBOT_SLIDESHOW_MAX_TOKENS` to control slideshow spec generation.
+Set `CMSBOT_SLIDESHOW_IMAGE_PROVIDER` to choose the slideshow image backend (`gemini`, `grok`, or `dalle`).
 
 ## Configuration
 
@@ -162,6 +164,7 @@ Copy `.env.example` to `.env` and add the providers you want to use:
 Anthropic_API_Key=
 OpenAI_API_Key=
 GEMINI_API_Key=
+GEMINI_API_KEY=
 OPENAI_COMPAT_API_KEY=
 OPENAI_COMPAT_BASE_URL=https://api.together.xyz/v1
 XAI_API_KEY=

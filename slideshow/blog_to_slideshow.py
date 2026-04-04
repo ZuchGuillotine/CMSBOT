@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -31,6 +32,14 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from cmsbot.project import load_project_profile
+from cmsbot.config import Config
+from cmsbot.providers import build_provider
+from cmsbot.screenshots import (
+    coerce_screenshot_refs,
+    load_manifest,
+    resolve_screenshot_dir,
+    summarize_manifest_for_prompt,
+)
 
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 HOOK_PROMPT_PATH = SCRIPT_DIR / "prompts" / "hook_generation.md"
@@ -152,27 +161,39 @@ def strip_html(html: str) -> str:
 # Claude API Integration
 # ---------------------------------------------------------------------------
 
-def call_claude(system_prompt: str, user_prompt: str, model: str = "claude-sonnet-4-6") -> str:
-    """Call the Anthropic Claude API. Requires ANTHROPIC_API_KEY env var."""
-    try:
-        import anthropic
-    except ImportError:
-        print("[ERROR] Install anthropic SDK: pip install anthropic")
-        sys.exit(1)
+async def call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    provider_name: str,
+    model_override: str | None = None,
+    max_tokens: int = 4096,
+) -> str:
+    """Call the configured LLM provider through the shared CMSBOT provider layer."""
+    provider_config = Config.from_env()
+    provider = build_provider(provider_name, provider_config)
 
-    client = anthropic.Anthropic()  # Uses ANTHROPIC_API_KEY from env
+    if model_override:
+        provider.model = model_override
 
-    message = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
+    response = await provider.generate_simple(
+        user_prompt=user_prompt,
+        system_prompt=system_prompt,
+        max_tokens=max_tokens,
+        temperature=0.4,
     )
-    return message.content[0].text
+    return response.content
 
 
-def generate_slideshow_specs(blog: dict, config: dict, hook_prompt: str) -> dict:
-    """Use Claude to extract slideshow specs from a blog post."""
+def generate_slideshow_specs(
+    blog: dict,
+    config: dict,
+    hook_prompt: str,
+    provider_name: str,
+    model_override: str | None = None,
+    max_tokens: int = 4096,
+    screenshot_prompt_block: str | None = None,
+) -> dict:
+    """Use an LLM provider to extract slideshow specs from a blog post."""
 
     formats_json = json.dumps(config["formats"], indent=2)
     banned_words = ", ".join(config["content_rules"]["banned_words"])
@@ -202,6 +223,9 @@ Available slideshow formats:
 
 Available hashtag pools:
 {json.dumps(config['hashtag_pools'], indent=2)}
+
+SCREENSHOT RULES:
+{screenshot_prompt_block or "No validated screenshot manifest is available. Use ai_lifestyle and never invent screenshot_ref values."}
 """
 
     user_prompt = f"""Analyze this blog post and generate slideshow specifications.
@@ -243,13 +267,15 @@ Output as a valid JSON object with this structure:
           "slide_num": 1,
           "text_overlay": "the text for this slide",
           "image_type": "ai_lifestyle or app_screenshot",
-          "image_note": "brief description of what the image should show"
+          "image_note": "brief description of what the image should show",
+          "screenshot_ref": "manifest key only when image_type is app_screenshot"
         }}
       ],
       "cta_slide": {{
         "text_overlay": "natural CTA text",
-        "image_type": "app_screenshot",
-        "screenshot_ref": "which app screen to show"
+        "image_type": "ai_lifestyle or app_screenshot",
+        "image_note": "brief description of what the image should show",
+        "screenshot_ref": "manifest key only when image_type is app_screenshot"
       }},
       "caption": "post caption with #hashtags",
       "target_platforms": ["tiktok", "instagram"]
@@ -259,7 +285,15 @@ Output as a valid JSON object with this structure:
 
 Return ONLY valid JSON, no markdown code fences."""
 
-    response = call_claude(system_prompt, user_prompt)
+    response = asyncio.run(
+        call_llm(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            provider_name=provider_name,
+            model_override=model_override,
+            max_tokens=max_tokens,
+        )
+    )
 
     # Try to parse JSON from response
     try:
@@ -384,15 +418,47 @@ def save_processed_slug(slug: str):
 # Main
 # ---------------------------------------------------------------------------
 
-def process_blog(blog: dict, config: dict, hook_prompt: str) -> Path:
+def process_blog(
+    blog: dict,
+    config: dict,
+    hook_prompt: str,
+    provider_name: str,
+    model_override: str | None = None,
+    max_tokens: int = 4096,
+    screenshot_dir: str | Path | None = None,
+    screenshot_manifest: dict | None = None,
+    screenshot_refs: list[str] | None = None,
+) -> Path:
     """Full pipeline: blog → slideshow specs → saved output."""
     print(f"\n{'='*60}")
     print(f"Processing: {blog['title']}")
     print(f"{'='*60}")
 
     # Generate specs
-    print("[1/3] Generating slideshow specs with Claude...")
-    specs = generate_slideshow_specs(blog, config, hook_prompt)
+    provider_label = model_override or provider_name
+    print(f"[1/3] Generating slideshow specs with {provider_label} (max_tokens={max_tokens})...")
+    specs = generate_slideshow_specs(
+        blog,
+        config,
+        hook_prompt,
+        provider_name=provider_name,
+        model_override=model_override,
+        max_tokens=max_tokens,
+        screenshot_prompt_block=summarize_manifest_for_prompt(
+            {
+                key: value
+                for key, value in (screenshot_manifest or {}).get("entries", {}).items()
+                if not screenshot_refs or key in screenshot_refs
+            }
+        ),
+    )
+    if screenshot_dir:
+        specs = coerce_screenshot_refs(
+            specs,
+            screenshot_dir=screenshot_dir,
+            manifest=screenshot_manifest,
+            allowed_refs=screenshot_refs,
+        )
 
     slideshow_count = len(specs.get("slideshows", []))
     print(f"[2/3] Generated {slideshow_count} slideshows")
@@ -427,15 +493,50 @@ def main():
     parser.add_argument("--api-base", default=None, help="API base URL")
     parser.add_argument("--project-file", default=None, help="Path to a CMSBOT project profile JSON file")
     parser.add_argument("--force", action="store_true", help="Re-process even if already done")
+    parser.add_argument(
+        "--provider",
+        default=os.getenv("CMSBOT_SLIDESHOW_PROVIDER", "anthropic"),
+        help="LLM provider for slideshow spec generation (default: env CMSBOT_SLIDESHOW_PROVIDER or anthropic)",
+    )
+    parser.add_argument(
+        "--model",
+        default=os.getenv("CMSBOT_SLIDESHOW_MODEL") or None,
+        help="Optional explicit model override for the selected provider",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=int(os.getenv("CMSBOT_SLIDESHOW_MAX_TOKENS", "4096")),
+        help="Max output tokens for slideshow spec generation",
+    )
 
     args = parser.parse_args()
     config = config_from_project(args.project_file)
     hook_prompt = load_hook_prompt()
     api_base = args.api_base or config["brand"].get("urls", {}).get("website", "")
+    screenshot_dir = resolve_screenshot_dir(
+        project_file=args.project_file,
+        default_dir=SCRIPT_DIR / "screenshots",
+    )
+    screenshot_manifest = load_manifest(screenshot_dir)
+    screenshot_refs: list[str] | None = None
+    if args.project_file:
+        project_profile = load_project_profile(args.project_file)
+        screenshot_refs = list(project_profile.section("slideshow").get("screenshot_refs", []))
 
     if args.blog_file:
         blog = load_blog_from_file(args.blog_file)
-        process_blog(blog, config, hook_prompt)
+        process_blog(
+            blog,
+            config,
+            hook_prompt,
+            provider_name=args.provider,
+            model_override=args.model,
+            max_tokens=args.max_tokens,
+            screenshot_dir=screenshot_dir,
+            screenshot_manifest=screenshot_manifest,
+            screenshot_refs=screenshot_refs,
+        )
 
     elif args.blog_slug:
         if not api_base:
@@ -443,7 +544,17 @@ def main():
             sys.exit(1)
         blog = load_blog_from_api(args.blog_slug, api_base)
         if blog:
-            process_blog(blog, config, hook_prompt)
+            process_blog(
+                blog,
+                config,
+                hook_prompt,
+                provider_name=args.provider,
+                model_override=args.model,
+                max_tokens=args.max_tokens,
+                screenshot_dir=screenshot_dir,
+                screenshot_manifest=screenshot_manifest,
+                screenshot_refs=screenshot_refs,
+            )
         else:
             print(f"[ERROR] Could not load blog: {args.blog_slug}")
             sys.exit(1)
@@ -473,7 +584,17 @@ def main():
             # Fetch full content
             full = load_blog_from_api(post["slug"], api_base)
             if full:
-                process_blog(full, config, hook_prompt)
+                process_blog(
+                    full,
+                    config,
+                    hook_prompt,
+                    provider_name=args.provider,
+                    model_override=args.model,
+                    max_tokens=args.max_tokens,
+                    screenshot_dir=screenshot_dir,
+                    screenshot_manifest=screenshot_manifest,
+                    screenshot_refs=screenshot_refs,
+                )
 
 
 if __name__ == "__main__":

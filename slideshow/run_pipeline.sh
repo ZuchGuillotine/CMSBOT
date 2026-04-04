@@ -8,13 +8,15 @@
 #   ./run_pipeline.sh --project-file ../projects/example-project.json --batch
 #
 # Environment variables required:
-#   ANTHROPIC_API_KEY  — For Claude (hook/text generation)
-#   GOOGLE_API_KEY     — For Nano Banana Pro (image generation) [optional if --prompt-only]
+#   Provider API key for slideshow spec generation
+#   Image provider API key matching CMSBOT_SLIDESHOW_IMAGE_PROVIDER [optional if --prompt-only]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUTPUT_DIR="${CMSBOT_SLIDESHOW_OUTPUT_DIR:-$SCRIPT_DIR/output}"
+SPEC_PROVIDER="${CMSBOT_SLIDESHOW_PROVIDER:-anthropic}"
+IMAGE_PROVIDER="${CMSBOT_SLIDESHOW_IMAGE_PROVIDER:-gemini}"
 DATE=$(date +%Y-%m-%d)
 BATCH_DIR="$OUTPUT_DIR/batch_$DATE"
 
@@ -67,19 +69,76 @@ if [[ -z "$BLOG_SLUG" && "$BATCH_MODE" == "false" ]]; then
   exit 1
 fi
 
-if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  error "ANTHROPIC_API_KEY not set"
-  exit 1
-fi
+case "$SPEC_PROVIDER" in
+  anthropic|anthropic_opus)
+    if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${Anthropic_API_Key:-}" ]]; then
+      error "Anthropic API key not set for provider '$SPEC_PROVIDER'"
+      exit 1
+    fi
+    ;;
+  openai)
+    if [[ -z "${OPENAI_API_KEY:-}" && -z "${OpenAI_API_Key:-}" ]]; then
+      error "OpenAI API key not set for provider '$SPEC_PROVIDER'"
+      exit 1
+    fi
+    ;;
+  gemini)
+    if [[ -z "${GEMINI_API_KEY:-}" && -z "${GEMINI_API_Key:-}" ]]; then
+      error "Gemini API key not set for provider '$SPEC_PROVIDER'"
+      exit 1
+    fi
+    ;;
+  openai_compat)
+    if [[ -z "${OPENAI_COMPAT_API_KEY:-}" ]]; then
+      error "OPENAI_COMPAT_API_KEY not set for provider '$SPEC_PROVIDER'"
+      exit 1
+    fi
+    ;;
+  *)
+    error "Unsupported CMSBOT_SLIDESHOW_PROVIDER: $SPEC_PROVIDER"
+    exit 1
+    ;;
+esac
 
-if [[ "$PROMPT_ONLY" == "false" && "$SKIP_IMAGES" == "false" && -z "${GOOGLE_API_KEY:-}" ]]; then
-  warn "GOOGLE_API_KEY not set — will generate prompts only for AI images"
-  PROMPT_ONLY=true
+if [[ "$PROMPT_ONLY" == "false" && "$SKIP_IMAGES" == "false" ]]; then
+  case "$IMAGE_PROVIDER" in
+    gemini)
+      if [[ -z "${GEMINI_API_KEY:-}" && -z "${GEMINI_API_Key:-}" ]]; then
+        warn "Gemini image provider selected but GEMINI_API_KEY not set — will generate prompts only for AI images"
+        PROMPT_ONLY=true
+      fi
+      ;;
+    grok)
+      if [[ -z "${XAI_API_KEY:-}" ]]; then
+        warn "Grok image provider selected but XAI_API_KEY not set — will generate prompts only for AI images"
+        PROMPT_ONLY=true
+      fi
+      ;;
+    dalle)
+      if [[ -z "${OPENAI_API_KEY:-}" && -z "${OpenAI_API_Key:-}" ]]; then
+        warn "DALL-E image provider selected but OPENAI_API_KEY not set — will generate prompts only for AI images"
+        PROMPT_ONLY=true
+      fi
+      ;;
+    *)
+      error "Unsupported CMSBOT_SLIDESHOW_IMAGE_PROVIDER: $IMAGE_PROVIDER"
+      exit 1
+      ;;
+  esac
 fi
 
 # ─────────────────────────────────────────────────
 step "1: Blog → Slideshow Specs"
 # ─────────────────────────────────────────────────
+
+log "Spec provider: $SPEC_PROVIDER"
+log "Image provider: $IMAGE_PROVIDER"
+if [[ -n "${CMSBOT_SLIDESHOW_MODEL:-}" ]]; then
+  log "Spec model override: $CMSBOT_SLIDESHOW_MODEL"
+fi
+if [[ -n "${CMSBOT_SLIDESHOW_MAX_TOKENS:-}" ]]; then
+  log "Spec max tokens override: $CMSBOT_SLIDESHOW_MAX_TOKENS"
+fi
 
 if [[ -n "$BLOG_SLUG" ]]; then
   log "Processing single blog: $BLOG_SLUG"
@@ -113,12 +172,12 @@ if [[ "$SKIP_IMAGES" == "true" ]]; then
   log "Skipping image generation (--skip-images)"
 elif [[ "$PROMPT_ONLY" == "true" ]]; then
   log "Generating image prompts only (--prompt-only)"
-  python3 "$SCRIPT_DIR/generate_images.py" --batch "$BATCH_DIR" --prompt-only
+  python3 "$SCRIPT_DIR/generate_images.py" --batch "$BATCH_DIR" --provider "$IMAGE_PROVIDER" --prompt-only
   log "Prompts saved to $BATCH_DIR/all_prompts.json"
   warn "To generate actual images, run: python3 generate_images.py --batch $BATCH_DIR"
 else
-  log "Generating AI images with Nano Banana Pro..."
-  python3 "$SCRIPT_DIR/generate_images.py" --batch "$BATCH_DIR"
+  log "Generating AI images with provider '$IMAGE_PROVIDER'..."
+  python3 "$SCRIPT_DIR/generate_images.py" --batch "$BATCH_DIR" --provider "$IMAGE_PROVIDER"
 fi
 
 # ─────────────────────────────────────────────────
@@ -163,8 +222,12 @@ echo "  4. Post images from the processed/ folder (or images/ if no post-process
 echo ""
 if [[ "$PROMPT_ONLY" == "true" ]]; then
   echo -e "${YELLOW}NOTE: Image generation was skipped. To generate images:${NC}"
-  echo "  export GOOGLE_API_KEY=your_key"
-  echo "  python3 $SCRIPT_DIR/generate_images.py --batch $BATCH_DIR"
+  case "$IMAGE_PROVIDER" in
+    gemini) echo "  export GEMINI_API_KEY=your_key" ;;
+    grok) echo "  export XAI_API_KEY=your_key" ;;
+    dalle) echo "  export OPENAI_API_KEY=your_key" ;;
+  esac
+  echo "  python3 $SCRIPT_DIR/generate_images.py --batch $BATCH_DIR --provider $IMAGE_PROVIDER"
   echo ""
 fi
 echo "Screenshots needed? Check each slideshow's script.txt for [Image: app_screenshot] entries."

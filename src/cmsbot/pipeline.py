@@ -68,30 +68,29 @@ class AutoreasonPipeline:
 
         # Image providers — build all available, fall back to DALL-E only
         director_provider = build_provider(roles.image_director, self.config)
-        image_providers: list[ImageProvider] = []
+        raster_image_providers: list[ImageProvider] = []
+        fetch_provider: ImageProvider | None = None
 
         if self.config.xai_key:
-            image_providers.append(
+            raster_image_providers.append(
                 GrokImageProvider(api_key=self.config.xai_key)
             )
 
         if self.config.gemini:
-            image_providers.append(
+            raster_image_providers.append(
                 NanobananProvider(api_key=self.config.gemini.api_key)
             )
 
         if self.config.unsplash_key:
-            image_providers.append(
-                UnsplashProvider(access_key=self.config.unsplash_key)
-            )
+            fetch_provider = UnsplashProvider(access_key=self.config.unsplash_key)
 
         # DALL-E as fallback if fewer than 2 providers available
-        if len(image_providers) < 2 and self.config.openai:
-            image_providers.append(
+        if len(raster_image_providers) < 2 and self.config.openai:
+            raster_image_providers.append(
                 DalleImageProvider(api_key=self.config.openai.api_key)
             )
 
-        if not image_providers:
+        if not raster_image_providers and fetch_provider is None:
             raise ValueError(
                 "No image providers configured. Set at least one of: "
                 "XAI_API_KEY, GEMINI_API_KEY, UNSPLASH_ACCESS_KEY, OPENAI_API_KEY"
@@ -102,15 +101,26 @@ class AutoreasonPipeline:
             judge_provider = OpenAIProvider(
                 api_key=self.config.openai.api_key, model="gpt-4o"
             )
+        elif self.config.anthropic:
+            judge_provider = build_provider("anthropic", self.config)
         else:
             judge_provider = director_provider
         image_judge = ImageJudge(judge_provider)
 
+        svg_provider = build_provider("openai", self.config) if self.config.openai else None
+        svg_fallback_provider = build_provider("anthropic", self.config) if self.config.anthropic else None
+        if svg_provider is None and svg_fallback_provider is not None:
+            svg_provider = svg_fallback_provider
+            svg_fallback_provider = None
+
         self.image_director = ImageDirector(
             director_provider=director_provider,
-            image_providers=image_providers,
+            raster_image_providers=raster_image_providers,
+            fetch_provider=fetch_provider,
             judge=image_judge,
             budget=self.budget,
+            svg_provider=svg_provider,
+            svg_fallback_provider=svg_fallback_provider,
         )
 
         self.renderer = Renderer()

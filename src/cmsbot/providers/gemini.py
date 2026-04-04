@@ -19,7 +19,7 @@ class GeminiProvider(LLMProvider):
 
     async def generate(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict],
         system_prompt: str = "",
         max_tokens: int = 4096,
         temperature: float = 0.7,
@@ -27,6 +27,8 @@ class GeminiProvider(LLMProvider):
         # Build contents for the Gemini API
         contents = []
         for msg in messages:
+            if not isinstance(msg["content"], str):
+                raise TypeError("GeminiProvider only supports text-only messages")
             role = "user" if msg["role"] == "user" else "model"
             contents.append(types.Content(
                 role=role,

@@ -18,7 +18,7 @@ class AnthropicProvider(LLMProvider):
 
     async def generate(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict],
         system_prompt: str = "",
         max_tokens: int = 4096,
         temperature: float = 0.7,
