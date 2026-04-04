@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -31,6 +32,8 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from cmsbot.project import load_project_profile
+from cmsbot.config import Config
+from cmsbot.providers import build_provider
 
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 HOOK_PROMPT_PATH = SCRIPT_DIR / "prompts" / "hook_generation.md"
@@ -152,27 +155,38 @@ def strip_html(html: str) -> str:
 # Claude API Integration
 # ---------------------------------------------------------------------------
 
-def call_claude(system_prompt: str, user_prompt: str, model: str = "claude-sonnet-4-6") -> str:
-    """Call the Anthropic Claude API. Requires ANTHROPIC_API_KEY env var."""
-    try:
-        import anthropic
-    except ImportError:
-        print("[ERROR] Install anthropic SDK: pip install anthropic")
-        sys.exit(1)
+async def call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    provider_name: str,
+    model_override: str | None = None,
+    max_tokens: int = 4096,
+) -> str:
+    """Call the configured LLM provider through the shared CMSBOT provider layer."""
+    provider_config = Config.from_env()
+    provider = build_provider(provider_name, provider_config)
 
-    client = anthropic.Anthropic()  # Uses ANTHROPIC_API_KEY from env
+    if model_override:
+        provider.model = model_override
 
-    message = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
+    response = await provider.generate_simple(
+        user_prompt=user_prompt,
+        system_prompt=system_prompt,
+        max_tokens=max_tokens,
+        temperature=0.4,
     )
-    return message.content[0].text
+    return response.content
 
 
-def generate_slideshow_specs(blog: dict, config: dict, hook_prompt: str) -> dict:
-    """Use Claude to extract slideshow specs from a blog post."""
+def generate_slideshow_specs(
+    blog: dict,
+    config: dict,
+    hook_prompt: str,
+    provider_name: str,
+    model_override: str | None = None,
+    max_tokens: int = 4096,
+) -> dict:
+    """Use an LLM provider to extract slideshow specs from a blog post."""
 
     formats_json = json.dumps(config["formats"], indent=2)
     banned_words = ", ".join(config["content_rules"]["banned_words"])
@@ -259,7 +273,15 @@ Output as a valid JSON object with this structure:
 
 Return ONLY valid JSON, no markdown code fences."""
 
-    response = call_claude(system_prompt, user_prompt)
+    response = asyncio.run(
+        call_llm(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            provider_name=provider_name,
+            model_override=model_override,
+            max_tokens=max_tokens,
+        )
+    )
 
     # Try to parse JSON from response
     try:
@@ -384,15 +406,30 @@ def save_processed_slug(slug: str):
 # Main
 # ---------------------------------------------------------------------------
 
-def process_blog(blog: dict, config: dict, hook_prompt: str) -> Path:
+def process_blog(
+    blog: dict,
+    config: dict,
+    hook_prompt: str,
+    provider_name: str,
+    model_override: str | None = None,
+    max_tokens: int = 4096,
+) -> Path:
     """Full pipeline: blog → slideshow specs → saved output."""
     print(f"\n{'='*60}")
     print(f"Processing: {blog['title']}")
     print(f"{'='*60}")
 
     # Generate specs
-    print("[1/3] Generating slideshow specs with Claude...")
-    specs = generate_slideshow_specs(blog, config, hook_prompt)
+    provider_label = model_override or provider_name
+    print(f"[1/3] Generating slideshow specs with {provider_label} (max_tokens={max_tokens})...")
+    specs = generate_slideshow_specs(
+        blog,
+        config,
+        hook_prompt,
+        provider_name=provider_name,
+        model_override=model_override,
+        max_tokens=max_tokens,
+    )
 
     slideshow_count = len(specs.get("slideshows", []))
     print(f"[2/3] Generated {slideshow_count} slideshows")
@@ -427,6 +464,22 @@ def main():
     parser.add_argument("--api-base", default=None, help="API base URL")
     parser.add_argument("--project-file", default=None, help="Path to a CMSBOT project profile JSON file")
     parser.add_argument("--force", action="store_true", help="Re-process even if already done")
+    parser.add_argument(
+        "--provider",
+        default=os.getenv("CMSBOT_SLIDESHOW_PROVIDER", "anthropic"),
+        help="LLM provider for slideshow spec generation (default: env CMSBOT_SLIDESHOW_PROVIDER or anthropic)",
+    )
+    parser.add_argument(
+        "--model",
+        default=os.getenv("CMSBOT_SLIDESHOW_MODEL") or None,
+        help="Optional explicit model override for the selected provider",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=int(os.getenv("CMSBOT_SLIDESHOW_MAX_TOKENS", "4096")),
+        help="Max output tokens for slideshow spec generation",
+    )
 
     args = parser.parse_args()
     config = config_from_project(args.project_file)
@@ -435,7 +488,14 @@ def main():
 
     if args.blog_file:
         blog = load_blog_from_file(args.blog_file)
-        process_blog(blog, config, hook_prompt)
+        process_blog(
+            blog,
+            config,
+            hook_prompt,
+            provider_name=args.provider,
+            model_override=args.model,
+            max_tokens=args.max_tokens,
+        )
 
     elif args.blog_slug:
         if not api_base:
@@ -443,7 +503,14 @@ def main():
             sys.exit(1)
         blog = load_blog_from_api(args.blog_slug, api_base)
         if blog:
-            process_blog(blog, config, hook_prompt)
+            process_blog(
+                blog,
+                config,
+                hook_prompt,
+                provider_name=args.provider,
+                model_override=args.model,
+                max_tokens=args.max_tokens,
+            )
         else:
             print(f"[ERROR] Could not load blog: {args.blog_slug}")
             sys.exit(1)
@@ -473,7 +540,14 @@ def main():
             # Fetch full content
             full = load_blog_from_api(post["slug"], api_base)
             if full:
-                process_blog(full, config, hook_prompt)
+                process_blog(
+                    full,
+                    config,
+                    hook_prompt,
+                    provider_name=args.provider,
+                    model_override=args.model,
+                    max_tokens=args.max_tokens,
+                )
 
 
 if __name__ == "__main__":

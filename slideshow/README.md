@@ -11,6 +11,14 @@ export ANTHROPIC_API_KEY=...
 export GOOGLE_API_KEY=...
 ```
 
+Spec generation defaults to `anthropic`, but you can swap providers or raise the completion cap:
+
+```bash
+export CMSBOT_SLIDESHOW_PROVIDER=openai        # or anthropic, gemini, openai_compat, anthropic_opus
+export CMSBOT_SLIDESHOW_MODEL=gpt-5.4-mini     # optional explicit model override
+export CMSBOT_SLIDESHOW_MAX_TOKENS=8192        # optional larger JSON budget
+```
+
 Optional project-pack overrides:
 
 ```bash
@@ -31,6 +39,7 @@ Optional project profile:
 ```bash
 python blog_to_slideshow.py --blog-file ../output/my-post/index.html --project-file ../projects/example-project.json
 python blog_to_slideshow.py --blog-slug how-we-handle-inbound-routing --project-file ../projects/example-project.json
+python blog_to_slideshow.py --blog-file ../output/my-post/index.html --provider openai --max-tokens 8192
 ```
 
 ## Full pipeline
@@ -47,5 +56,11 @@ The pipeline produces:
 - generated or copied images
 - post-processed assets
 - `review.html` for manual approval
+
+Artifact layout inside each slideshow folder:
+
+- `images/` contains the copied screenshots or generated raw slide images
+- `processed/` contains the post-processed JPEGs to publish
+- `review_grid.jpg` is the contact-sheet style review thumbnail page for that slideshow
 
 If a product repo exports `CMSBOT_SLIDESHOW_SCREENSHOTS_DIR`, app-screenshot slides will use that directory instead of the core repo's `slideshow/screenshots/` folder.
