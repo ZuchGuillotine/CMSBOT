@@ -24,6 +24,13 @@ from cmsbot.project import (
     make_project_profile,
     write_project_profile,
 )
+from cmsbot.screenshots import (
+    copy_screenshot_into_dir,
+    describe_screenshots,
+    load_manifest,
+    resolve_screenshot_dir,
+    validate_manifest,
+)
 from cmsbot.topics import (
     build_cmsbot_command,
     format_topic_brief,
@@ -398,6 +405,142 @@ def topics(
         console.print()
 
     console.print(f"[dim]Loaded {len(merged)} topic briefs from {chosen_file}.[/dim]")
+
+
+@main.group()
+def screenshots():
+    """Manage slideshow screenshot manifests."""
+    pass
+
+
+@screenshots.command("describe")
+@click.option("--dir", "screenshot_dir", type=click.Path(path_type=Path), default=None, help="Screenshots directory.")
+@click.option("--project-file", type=click.Path(exists=True), default=None, help="Project profile used to resolve screenshot_dir.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+@click.option("--provider", default=None, help="Vision-capable provider to describe screenshots.")
+@click.option("--model", default=None, help="Optional model override for the describer.")
+@click.option("--force", is_flag=True, help="Re-describe files even when checksum matches the manifest.")
+def screenshots_describe(
+    screenshot_dir: Path | None,
+    project_file: str | None,
+    env_file: str | None,
+    provider: str | None,
+    model: str | None,
+    force: bool,
+):
+    """Generate or update screenshots/manifest.json using a vision model."""
+    directory = resolve_screenshot_dir(screenshot_dir, project_file=project_file)
+    try:
+        manifest, stats = describe_screenshots(
+            directory,
+            env_file=env_file,
+            provider=provider,
+            model=model,
+            force=force,
+        )
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    console.print(
+        Panel.fit(
+            f"[bold]Screenshot Manifest Updated[/bold]\n\n"
+            f"[dim]Directory:[/dim] {directory}\n"
+            f"[dim]Entries:[/dim] {len(manifest.get('entries', {}))}\n"
+            f"[dim]Described:[/dim] {stats['described']}\n"
+            f"[dim]Reused:[/dim] {stats['reused']}\n"
+            f"[dim]Removed:[/dim] {stats['removed']}\n"
+            f"[dim]Manifest:[/dim] {directory / 'manifest.json'}",
+            border_style="cyan",
+        )
+    )
+
+
+@screenshots.command("list")
+@click.option("--dir", "screenshot_dir", type=click.Path(path_type=Path), default=None, help="Screenshots directory.")
+@click.option("--project-file", type=click.Path(exists=True), default=None, help="Project profile used to resolve screenshot_dir.")
+def screenshots_list(screenshot_dir: Path | None, project_file: str | None):
+    """List manifest refs available to slideshow generation."""
+    directory = resolve_screenshot_dir(screenshot_dir, project_file=project_file)
+    manifest = load_manifest(directory)
+    if manifest is None or not manifest.get("entries"):
+        console.print(f"[dim]No manifest entries found in {directory}.[/dim]")
+        return
+
+    table = Table(title=f"Screenshot Refs ({directory})")
+    table.add_column("Ref", style="bold")
+    table.add_column("File")
+    table.add_column("Screen")
+    table.add_column("Description")
+
+    for key, entry in sorted(manifest.get("entries", {}).items()):
+        table.add_row(
+            key,
+            str(entry.get("file") or ""),
+            str(entry.get("screen_name") or ""),
+            str(entry.get("description") or ""),
+        )
+    console.print(table)
+
+
+@screenshots.command("validate")
+@click.option("--dir", "screenshot_dir", type=click.Path(path_type=Path), default=None, help="Screenshots directory.")
+@click.option("--project-file", type=click.Path(exists=True), default=None, help="Project profile used to resolve screenshot_dir.")
+def screenshots_validate(screenshot_dir: Path | None, project_file: str | None):
+    """Validate that manifest entries still point to real screenshot files."""
+    directory = resolve_screenshot_dir(screenshot_dir, project_file=project_file)
+    issues = validate_manifest(directory)
+    if issues:
+        console.print(f"[red]Validation failed for {directory}[/red]")
+        for issue in issues:
+            console.print(f"- {issue}")
+        sys.exit(1)
+    console.print(f"[green]Manifest valid:[/green] {directory / 'manifest.json'}")
+
+
+@screenshots.command("add")
+@click.argument("source", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--dir", "screenshot_dir", type=click.Path(path_type=Path), default=None, help="Screenshots directory.")
+@click.option("--project-file", type=click.Path(exists=True), default=None, help="Project profile used to resolve screenshot_dir.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+@click.option("--provider", default=None, help="Vision-capable provider to describe screenshots.")
+@click.option("--model", default=None, help="Optional model override for the describer.")
+def screenshots_add(
+    source: Path,
+    screenshot_dir: Path | None,
+    project_file: str | None,
+    env_file: str | None,
+    provider: str | None,
+    model: str | None,
+):
+    """Copy a screenshot into the pack and update the manifest for that file."""
+    directory = resolve_screenshot_dir(screenshot_dir, project_file=project_file)
+    try:
+        destination = copy_screenshot_into_dir(source, directory)
+        manifest, _ = describe_screenshots(
+            directory,
+            env_file=env_file,
+            provider=provider,
+            model=model,
+            target_files=[destination],
+        )
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    entry_key = next(
+        (key for key, entry in manifest.get("entries", {}).items() if entry.get("file") == destination.name),
+        None,
+    )
+    console.print(
+        Panel.fit(
+            f"[bold]Screenshot Added[/bold]\n\n"
+            f"[dim]File:[/dim] {destination}\n"
+            f"[dim]Ref:[/dim] {entry_key or 'unknown'}\n"
+            f"[dim]Manifest:[/dim] {directory / 'manifest.json'}",
+            border_style="green",
+        )
+    )
 
 
 @main.group()
