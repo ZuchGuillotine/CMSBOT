@@ -34,6 +34,12 @@ if str(SRC_DIR) not in sys.path:
 from cmsbot.project import load_project_profile
 from cmsbot.config import Config
 from cmsbot.providers import build_provider
+from cmsbot.screenshots import (
+    coerce_screenshot_refs,
+    load_manifest,
+    resolve_screenshot_dir,
+    summarize_manifest_for_prompt,
+)
 
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 HOOK_PROMPT_PATH = SCRIPT_DIR / "prompts" / "hook_generation.md"
@@ -185,6 +191,7 @@ def generate_slideshow_specs(
     provider_name: str,
     model_override: str | None = None,
     max_tokens: int = 4096,
+    screenshot_prompt_block: str | None = None,
 ) -> dict:
     """Use an LLM provider to extract slideshow specs from a blog post."""
 
@@ -216,6 +223,9 @@ Available slideshow formats:
 
 Available hashtag pools:
 {json.dumps(config['hashtag_pools'], indent=2)}
+
+SCREENSHOT RULES:
+{screenshot_prompt_block or "No validated screenshot manifest is available. Use ai_lifestyle and never invent screenshot_ref values."}
 """
 
     user_prompt = f"""Analyze this blog post and generate slideshow specifications.
@@ -257,13 +267,15 @@ Output as a valid JSON object with this structure:
           "slide_num": 1,
           "text_overlay": "the text for this slide",
           "image_type": "ai_lifestyle or app_screenshot",
-          "image_note": "brief description of what the image should show"
+          "image_note": "brief description of what the image should show",
+          "screenshot_ref": "manifest key only when image_type is app_screenshot"
         }}
       ],
       "cta_slide": {{
         "text_overlay": "natural CTA text",
-        "image_type": "app_screenshot",
-        "screenshot_ref": "which app screen to show"
+        "image_type": "ai_lifestyle or app_screenshot",
+        "image_note": "brief description of what the image should show",
+        "screenshot_ref": "manifest key only when image_type is app_screenshot"
       }},
       "caption": "post caption with #hashtags",
       "target_platforms": ["tiktok", "instagram"]
@@ -413,6 +425,9 @@ def process_blog(
     provider_name: str,
     model_override: str | None = None,
     max_tokens: int = 4096,
+    screenshot_dir: str | Path | None = None,
+    screenshot_manifest: dict | None = None,
+    screenshot_refs: list[str] | None = None,
 ) -> Path:
     """Full pipeline: blog → slideshow specs → saved output."""
     print(f"\n{'='*60}")
@@ -429,7 +444,21 @@ def process_blog(
         provider_name=provider_name,
         model_override=model_override,
         max_tokens=max_tokens,
+        screenshot_prompt_block=summarize_manifest_for_prompt(
+            {
+                key: value
+                for key, value in (screenshot_manifest or {}).get("entries", {}).items()
+                if not screenshot_refs or key in screenshot_refs
+            }
+        ),
     )
+    if screenshot_dir:
+        specs = coerce_screenshot_refs(
+            specs,
+            screenshot_dir=screenshot_dir,
+            manifest=screenshot_manifest,
+            allowed_refs=screenshot_refs,
+        )
 
     slideshow_count = len(specs.get("slideshows", []))
     print(f"[2/3] Generated {slideshow_count} slideshows")
@@ -485,6 +514,15 @@ def main():
     config = config_from_project(args.project_file)
     hook_prompt = load_hook_prompt()
     api_base = args.api_base or config["brand"].get("urls", {}).get("website", "")
+    screenshot_dir = resolve_screenshot_dir(
+        project_file=args.project_file,
+        default_dir=SCRIPT_DIR / "screenshots",
+    )
+    screenshot_manifest = load_manifest(screenshot_dir)
+    screenshot_refs: list[str] | None = None
+    if args.project_file:
+        project_profile = load_project_profile(args.project_file)
+        screenshot_refs = list(project_profile.section("slideshow").get("screenshot_refs", []))
 
     if args.blog_file:
         blog = load_blog_from_file(args.blog_file)
@@ -495,6 +533,9 @@ def main():
             provider_name=args.provider,
             model_override=args.model,
             max_tokens=args.max_tokens,
+            screenshot_dir=screenshot_dir,
+            screenshot_manifest=screenshot_manifest,
+            screenshot_refs=screenshot_refs,
         )
 
     elif args.blog_slug:
@@ -510,6 +551,9 @@ def main():
                 provider_name=args.provider,
                 model_override=args.model,
                 max_tokens=args.max_tokens,
+                screenshot_dir=screenshot_dir,
+                screenshot_manifest=screenshot_manifest,
+                screenshot_refs=screenshot_refs,
             )
         else:
             print(f"[ERROR] Could not load blog: {args.blog_slug}")
@@ -547,6 +591,9 @@ def main():
                     provider_name=args.provider,
                     model_override=args.model,
                     max_tokens=args.max_tokens,
+                    screenshot_dir=screenshot_dir,
+                    screenshot_manifest=screenshot_manifest,
+                    screenshot_refs=screenshot_refs,
                 )
 
 

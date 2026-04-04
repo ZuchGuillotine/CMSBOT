@@ -21,8 +21,15 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from shutil import copy2
 
 SCRIPT_DIR = Path(__file__).parent
+SRC_DIR = SCRIPT_DIR.parent / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from cmsbot.screenshots import load_manifest, resolve_screenshot_ref
+
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 TEMPLATES_DIR = SCRIPT_DIR / "prompts" / "image_json_templates"
 SCREENSHOTS_DIR = Path(
@@ -265,7 +272,8 @@ def process_spec_file(spec_path: Path, prompt_only: bool = False) -> dict:
     with open(spec_path) as f:
         specs = json.load(f)
 
-    results = {"generated": 0, "skipped_screenshot": 0, "errors": 0, "prompts": []}
+    manifest = load_manifest(SCREENSHOTS_DIR)
+    results = {"generated": 0, "resolved_screenshot": 0, "fallback_ai": 0, "errors": 0, "prompts": []}
 
     for show in specs.get("slideshows", []):
         show_id = show["id"]
@@ -290,18 +298,26 @@ def process_spec_file(spec_path: Path, prompt_only: bool = False) -> dict:
             output_path = images_dir / filename
 
             if img_type == "app_screenshot":
-                # Check if screenshot exists in library
                 ref = slide.get("screenshot_ref", "")
-                screenshot_path = SCREENSHOTS_DIR / f"{ref}.png"
-                if screenshot_path.exists():
-                    # Copy screenshot to output
-                    from shutil import copy2
-                    copy2(screenshot_path, output_path)
-                    print(f"    Slide {num}: copied screenshot '{ref}'")
-                else:
-                    print(f"    Slide {num}: ⚠ SCREENSHOT NEEDED: '{ref}' → {SCREENSHOTS_DIR}/")
-                results["skipped_screenshot"] += 1
-                continue
+                resolved = resolve_screenshot_ref(ref, screenshot_dir=SCREENSHOTS_DIR, manifest=manifest)
+                if resolved and resolved.file.exists():
+                    screenshot_name = img_note.replace(" ", "_")[:30] or resolved.key
+                    screenshot_output = images_dir / f"{num:02d}_{screenshot_name}{resolved.file.suffix.lower()}"
+                    copy2(resolved.file, screenshot_output)
+                    print(
+                        f"    Slide {num}: copied screenshot '{resolved.key}' "
+                        f"({resolved.strategy}, {resolved.file.name})"
+                    )
+                    results["resolved_screenshot"] += 1
+                    continue
+
+                fallback_note = img_note or ref or "product in use"
+                print(
+                    f"    Slide {num}: ⚠ screenshot unresolved for '{ref}'. "
+                    f"Falling back to AI image."
+                )
+                img_note = fallback_note
+                results["fallback_ai"] += 1
 
             # AI image generation
             scene_key, custom_subject = image_note_to_scene(img_note)
@@ -341,7 +357,7 @@ def process_batch(batch_dir: Path, prompt_only: bool = False):
 
     print(f"Found {len(spec_files)} spec files in {batch_path.name}")
 
-    total = {"generated": 0, "skipped_screenshot": 0, "errors": 0, "prompts": []}
+    total = {"generated": 0, "resolved_screenshot": 0, "fallback_ai": 0, "errors": 0, "prompts": []}
 
     for spec_file in spec_files:
         print(f"\nProcessing: {spec_file.name}")
@@ -354,7 +370,8 @@ def process_batch(batch_dir: Path, prompt_only: bool = False):
 
     print(f"\n{'='*40}")
     print(f"Generated: {total['generated']} images")
-    print(f"Screenshots needed: {total['skipped_screenshot']}")
+    print(f"Screenshots copied: {total['resolved_screenshot']}")
+    print(f"Screenshot AI fallbacks: {total['fallback_ai']}")
     print(f"Errors: {total['errors']}")
 
     if prompt_only:
