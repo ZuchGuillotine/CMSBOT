@@ -49,3 +49,26 @@ The pipeline produces:
 - `review.html` for manual approval
 
 If a product repo exports `CMSBOT_SLIDESHOW_SCREENSHOTS_DIR`, app-screenshot slides will use that directory instead of the core repo's `slideshow/screenshots/` folder.
+
+## Performance tracking
+
+Manual social logging still works:
+
+```bash
+python track_performance.py log --id stack-mistakes-v1 --platform tiktok --views 45000 --saves 1200
+```
+
+For blog SEO performance, import the latest combined GSC + GA4 evaluation output:
+
+```bash
+../run.sh seo evaluate
+../run.sh slideshow track import-seo-eval
+```
+
+Or point at a specific report:
+
+```bash
+python track_performance.py import-seo-eval --file ../seo/output/evaluation_YYYY-MM-DD.json
+```
+
+This stores blog records with pageviews, organic sessions, conversions, impressions, clicks, ranking position, and the evaluator's performance score so the same local database can track both SEO content and social posts.

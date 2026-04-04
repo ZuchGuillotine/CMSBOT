@@ -7,6 +7,7 @@ Generates weekly reports and identifies top-performing formats/hooks.
 
 Usage:
   python track_performance.py log --id "stack-mistakes-v1" --platform tiktok --views 45000 --saves 1200
+  python track_performance.py import-seo-eval
   python track_performance.py report --period weekly
   python track_performance.py top-formats --min-posts 5
   python track_performance.py export-winners  # Export top hooks for reuse
@@ -20,17 +21,22 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 SCRIPT_DIR = Path(__file__).parent
 PERFORMANCE_DB = SCRIPT_DIR / "performance_data.json"
 PERFORMANCE_CSV = SCRIPT_DIR / "performance_data.csv"
+DEFAULT_SEO_OUTPUT_DIR = SCRIPT_DIR.parent / "seo" / "output"
 
 CSV_HEADERS = [
-    "post_id", "platform", "format", "hook", "source_blog",
+    "post_id", "platform", "content_type", "format", "hook", "source_blog",
     "posted_date", "views_24h", "views_48h", "views_7d",
     "saves", "shares", "comments", "profile_visits",
     "link_clicks", "downloads_estimate", "revenue_estimate",
-    "notes"
+    "url", "title", "impressions", "seo_clicks", "avg_position", "ctr",
+    "pageviews", "organic_sessions", "unique_users", "bounce_rate",
+    "avg_session_duration", "conversions", "performance_score",
+    "opportunities", "import_source", "notes"
 ]
 
 
@@ -53,6 +59,117 @@ def save_db(data: list[dict]):
             writer.writerow(row)
 
 
+def _find_latest_evaluation_file(seo_output_dir: Path) -> Path | None:
+    matches = sorted(seo_output_dir.glob("evaluation_*.json"))
+    return matches[-1] if matches else None
+
+
+def _safe_date(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return datetime.now().strftime("%Y-%m-%d")
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+    except ValueError:
+        return raw[:10]
+
+
+def _upsert_entry(db: list[dict[str, Any]], entry: dict[str, Any]) -> None:
+    for i, existing in enumerate(db):
+        if existing.get("post_id") == entry["post_id"] and existing.get("platform") == entry["platform"]:
+            merged = dict(existing)
+            merged.update(entry)
+            db[i] = merged
+            return
+    db.append(entry)
+
+
+def import_seo_evaluation(args):
+    """Import blog performance from the latest SEO evaluation report."""
+    seo_output_dir = Path(args.seo_output_dir).expanduser().resolve()
+    report_path = Path(args.file).expanduser().resolve() if args.file else _find_latest_evaluation_file(seo_output_dir)
+
+    if report_path is None or not report_path.is_file():
+        print(
+            f"No evaluation report found. Run ./run.sh seo evaluate first or pass --file. "
+            f"Looked in {seo_output_dir}"
+        )
+        return
+
+    with open(report_path) as f:
+        report = json.load(f)
+
+    scorecards = report.get("contentScorecards", [])
+    if not isinstance(scorecards, list) or not scorecards:
+        print(f"No contentScorecards found in {report_path}")
+        return
+
+    db = load_db()
+    imported = 0
+    generated_at = str(report.get("generatedAt") or datetime.now().isoformat())
+
+    for card in scorecards:
+        if not isinstance(card, dict):
+            continue
+
+        traffic = card.get("traffic") if isinstance(card.get("traffic"), dict) else {}
+        ranking_keywords = card.get("rankingKeywords") if isinstance(card.get("rankingKeywords"), list) else []
+        total_impressions = sum(int((kw or {}).get("impressions", 0) or 0) for kw in ranking_keywords if isinstance(kw, dict))
+        total_clicks = sum(int((kw or {}).get("clicks", 0) or 0) for kw in ranking_keywords if isinstance(kw, dict))
+
+        best_position = 0.0
+        if ranking_keywords:
+            positions = [float(kw.get("position", 0) or 0) for kw in ranking_keywords if isinstance(kw, dict) and kw.get("position") is not None]
+            if positions:
+                best_position = min(positions)
+
+        entry = {
+            "post_id": card.get("slug") or "",
+            "platform": "blog",
+            "content_type": "blog",
+            "format": "seo_content",
+            "hook": "",
+            "source_blog": card.get("slug") or "",
+            "posted_date": _safe_date(str(card.get("publishedAt") or "")),
+            "views_24h": 0,
+            "views_48h": 0,
+            "views_7d": int(traffic.get("pageviews", 0) or 0),
+            "saves": 0,
+            "shares": 0,
+            "comments": 0,
+            "profile_visits": 0,
+            "link_clicks": total_clicks,
+            "downloads_estimate": int(traffic.get("conversions", 0) or 0),
+            "revenue_estimate": 0,
+            "url": card.get("url") or "",
+            "title": card.get("title") or "",
+            "impressions": total_impressions,
+            "seo_clicks": total_clicks,
+            "avg_position": round(best_position, 2) if best_position else 0,
+            "ctr": round((total_clicks / total_impressions), 4) if total_impressions else 0,
+            "pageviews": int(traffic.get("pageviews", 0) or 0),
+            "organic_sessions": int(traffic.get("organicTraffic", 0) or 0),
+            "unique_users": int(traffic.get("uniqueUsers", 0) or 0),
+            "bounce_rate": float(traffic.get("bounceRate", 0) or 0),
+            "avg_session_duration": float(traffic.get("avgSessionDuration", 0) or 0),
+            "conversions": int(traffic.get("conversions", 0) or 0),
+            "performance_score": float(card.get("performanceScore", 0) or 0),
+            "opportunities": json.dumps(card.get("opportunities", [])),
+            "import_source": str(report_path),
+            "notes": f"Imported from SEO evaluation generated at {generated_at}",
+            "updated_at": datetime.now().isoformat(),
+        }
+
+        if not entry["post_id"]:
+            continue
+
+        _upsert_entry(db, entry)
+        imported += 1
+
+    save_db(db)
+    print(f"Imported {imported} blog records from {report_path}")
+
+
 def log_post(args):
     """Log performance data for a post."""
     db = load_db()
@@ -67,6 +184,7 @@ def log_post(args):
     entry = {
         "post_id": args.id,
         "platform": args.platform,
+        "content_type": "social",
         "format": args.format or "",
         "hook": args.hook or "",
         "source_blog": args.source_blog or "",
@@ -271,6 +389,22 @@ def main():
     log_parser.add_argument("--notes", default="")
 
     # Report command
+    import_parser = subparsers.add_parser(
+        "import-seo-eval",
+        help="Import blog performance from seo/output evaluation JSON",
+    )
+    import_parser.add_argument(
+        "--file",
+        default="",
+        help="Explicit evaluation_YYYY-MM-DD.json file. Defaults to the latest in seo/output.",
+    )
+    import_parser.add_argument(
+        "--seo-output-dir",
+        default=str(DEFAULT_SEO_OUTPUT_DIR),
+        help="Directory containing evaluation_*.json files.",
+    )
+
+    # Report command
     report_parser = subparsers.add_parser("report", help="Generate performance report")
     report_parser.add_argument("--period", choices=["weekly", "monthly", "all"], default="weekly")
 
@@ -285,6 +419,8 @@ def main():
 
     if args.command == "log":
         log_post(args)
+    elif args.command == "import-seo-eval":
+        import_seo_evaluation(args)
     elif args.command == "report":
         generate_report(args)
     elif args.command == "top-formats":

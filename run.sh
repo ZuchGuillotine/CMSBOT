@@ -56,7 +56,7 @@ case "${1:-help}" in
     ensure_bootstrapped
     shift
     if [[ $# -eq 0 ]]; then
-      echo "Usage: ./run.sh slideshow <specs|images|postprocess|review|pipeline> [args...]"
+      echo "Usage: ./run.sh slideshow <specs|images|postprocess|review|pipeline|track> [args...]"
       exit 1
     fi
 
@@ -88,6 +88,12 @@ case "${1:-help}" in
           "$VENV/bin/python" build_review.py "$@"
         )
         ;;
+      track)
+        (
+          cd "$SLIDESHOW_DIR"
+          "$VENV/bin/python" track_performance.py "$@"
+        )
+        ;;
       pipeline)
         (
           cd "$SLIDESHOW_DIR"
@@ -112,7 +118,7 @@ Commands:
   ./run.sh topics [args...]
   ./run.sh export-blog-draft <output_dir> [args...]
   ./run.sh seo <research|autocomplete|reddit|competitors|evaluate|evaluate:gsc|evaluate:ga4|test:connectivity> [args...]
-  ./run.sh slideshow <specs|images|postprocess|review|pipeline> [args...]
+  ./run.sh slideshow <specs|images|postprocess|review|pipeline|track> [args...]
 
 Examples:
   ./run.sh bootstrap
