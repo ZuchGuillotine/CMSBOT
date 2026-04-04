@@ -8,7 +8,7 @@ The slideshow scripts can read a CMSBOT project profile JSON file for brand voic
 
 ```bash
 export ANTHROPIC_API_KEY=...
-export GOOGLE_API_KEY=...
+export GEMINI_API_KEY=...
 ```
 
 Spec generation defaults to `anthropic`, but you can swap providers or raise the completion cap:
@@ -17,6 +17,13 @@ Spec generation defaults to `anthropic`, but you can swap providers or raise the
 export CMSBOT_SLIDESHOW_PROVIDER=openai        # or anthropic, gemini, openai_compat, anthropic_opus
 export CMSBOT_SLIDESHOW_MODEL=gpt-5.4-mini     # optional explicit model override
 export CMSBOT_SLIDESHOW_MAX_TOKENS=8192        # optional larger JSON budget
+```
+
+Image generation defaults to `gemini`, but slideshow image generation can also use Grok or DALL-E:
+
+```bash
+export CMSBOT_SLIDESHOW_IMAGE_PROVIDER=grok    # or gemini, dalle
+export XAI_API_KEY=...                         # for Grok
 ```
 
 Optional project-pack overrides:
@@ -47,6 +54,7 @@ python blog_to_slideshow.py --blog-file ../output/my-post/index.html --provider 
 ```bash
 ./run_pipeline.sh --blog-slug how-we-handle-inbound-routing --project-file ../projects/example-project.json
 ./run_pipeline.sh --project-file ../projects/example-project.json --batch
+CMSBOT_SLIDESHOW_IMAGE_PROVIDER=grok ./run_pipeline.sh --project-file ../projects/example-project.json --batch
 ```
 
 The pipeline produces:
@@ -56,6 +64,15 @@ The pipeline produces:
 - generated or copied images
 - post-processed assets
 - `review.html` for manual approval
+
+Standalone image generation examples:
+
+```bash
+python generate_images.py --batch output/batch_2026-04-01 --provider gemini
+python generate_images.py --batch output/batch_2026-04-01 --provider grok
+python generate_images.py --batch output/batch_2026-04-01 --provider dalle
+python generate_images.py --batch output/batch_2026-04-01 --provider grok --prompt-only
+```
 
 Artifact layout inside each slideshow folder:
 
