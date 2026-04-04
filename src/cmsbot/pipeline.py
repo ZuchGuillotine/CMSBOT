@@ -267,6 +267,10 @@ class AutoreasonPipeline:
         )
 
         # Write output files
+        markdown_path = output_dir / "content.md"
+        markdown_path.write_text(current_draft.content, encoding="utf-8")
+        self._log(f"  -> Saved markdown to {markdown_path}")
+
         html_path = output_dir / "index.html"
         html_path.write_text(html, encoding="utf-8")
         self._log(f"  -> Saved to {html_path}")

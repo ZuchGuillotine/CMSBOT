@@ -24,6 +24,7 @@ from cmsbot.project import (
     make_project_profile,
     write_project_profile,
 )
+from cmsbot.social_threads import export_social_thread
 from cmsbot.screenshots import (
     copy_screenshot_into_dir,
     describe_screenshots,
@@ -269,6 +270,74 @@ def export_blog_draft_command(
             f"[dim]Status:[/dim] {payload['status']}\n"
             f"[dim]Output:[/dim] {destination}",
             border_style="green",
+        )
+    )
+
+
+@main.command("export-thread")
+@click.argument("output_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--project-file", type=click.Path(exists=True), required=True, help="CMSBOT project profile JSON.")
+@click.option("--context-file", type=click.Path(exists=True), default=None, help="Optional extra brand/context document.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+@click.option("--section", type=int, default=None, help="1-based section index to repurpose.")
+@click.option("--section-title", default=None, help="Exact section heading to repurpose.")
+@click.option("--provider", default=None, help="Optional provider override for thread generation.")
+@click.option(
+    "--image-mode",
+    type=click.Choice(["auto", "reuse", "generate", "none"]),
+    default="auto",
+    show_default=True,
+    help="Reuse existing blog images when possible, or generate a social visual with the existing image pipeline.",
+)
+@click.option(
+    "--save-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional explicit output directory. Defaults to <output_dir>/threads.",
+)
+def export_thread_command(
+    output_dir: Path,
+    project_file: str,
+    context_file: str | None,
+    env_file: str | None,
+    section: int | None,
+    section_title: str | None,
+    provider: str | None,
+    image_mode: str,
+    save_dir: Path | None,
+):
+    """Export a Threads/X-ready thread from a generated CMSBOT blog post."""
+    try:
+        payload, json_path, md_path = export_social_thread(
+            output_dir,
+            project_file=project_file,
+            context_file=context_file,
+            env_file=env_file,
+            section=section,
+            section_title=section_title,
+            provider_name=provider,
+            image_mode=image_mode,
+            save_dir=save_dir,
+        )
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    media_count = sum(len(post.get("media_paths") or []) for post in payload["posts"])
+    console.print(
+        Panel.fit(
+            f"[bold]Thread Exported[/bold]\n\n"
+            f"[dim]Project:[/dim] {payload['project']}\n"
+            f"[dim]Article:[/dim] {payload['source']['article_title']}\n"
+            f"[dim]Section:[/dim] {payload['source']['section_title']}\n"
+            f"[dim]Posts:[/dim] {len(payload['posts'])}\n"
+            f"[dim]Media:[/dim] {media_count}\n"
+            f"[dim]JSON:[/dim] {json_path}\n"
+            f"[dim]Markdown:[/dim] {md_path}",
+            border_style="magenta",
         )
     )
 

@@ -12,6 +12,8 @@ CMSBOT is the reusable content and marketing core that can be pointed at differe
   Turns SEO evaluator output and curated briefs into ready-to-run CMSBOT prompts.
 - `cmsbot export-blog-draft`
   Exports rendered HTML into a portable `blog_draft.json` artifact.
+- `cmsbot export-thread`
+  Repurposes a generated blog section into a brand-aligned Threads/X thread with reusable or generated media.
 - [`seo/`](./seo/README.md)
   Project-driven keyword research and Search Console / GA4 evaluation.
 - [`slideshow/`](./slideshow/README.md)
@@ -71,6 +73,15 @@ Bootstrap creates `.venv`, installs the Python package, and installs `seo` Node 
 ./run.sh export-blog-draft output/lead-routing-mistakes
 ```
 
+5. Repurpose a section of the generated blog into a Threads/X-ready thread.
+
+```bash
+./run.sh export-thread output/lead-routing-mistakes \
+  --project-file projects/northstar-crm.json \
+  --section 2 \
+  --image-mode auto
+```
+
 ## Command Surface
 
 ```bash
@@ -87,6 +98,7 @@ Bootstrap creates `.venv`, installs the Python package, and installs `seo` Node 
 ./run.sh topics --command 0 --project-file projects/example-project.json
 
 ./run.sh export-blog-draft output/lead-routing-mistakes
+./run.sh export-thread output/lead-routing-mistakes --project-file projects/example-project.json --section 2 --image-mode auto
 
 ./run.sh seo research
 ./run.sh seo evaluate
@@ -115,7 +127,10 @@ The project profile carries product-specific inputs such as:
 CMSBOT standardizes these portable artifacts:
 
 - generated HTML output
+- generated markdown output (`content.md`)
 - `blog_draft.json`
+- `threads/thread.json`
+- `threads/thread.md`
 - `topic_briefs_*.json`
 - slideshow spec JSON
 - review HTML
@@ -141,6 +156,42 @@ Then turn evaluator output into prompts:
 ```
 
 Set `CMSBOT_SEO_OUTPUT_DIR` if a wrapper wants SEO artifacts written somewhere other than `seo/output`.
+
+## Threads/X Workflow
+
+Generate a blog post first, then repurpose one section into a short thread:
+
+```bash
+./run.sh generate "Write a blog post about lead routing mistakes" \
+  --type blog \
+  --project-file projects/northstar-crm.json \
+  --style persuasive
+
+./run.sh export-thread output/lead-routing-mistakes \
+  --project-file projects/northstar-crm.json \
+  --section 2 \
+  --image-mode auto
+```
+
+Key behavior:
+
+- Uses the generated blog content from `content.md` when available, with `index.html` as fallback.
+- Summarizes a single section into a maximum of 5 posts.
+- Enforces project-specific branding, voice, and disallowed-claim rules from the project profile.
+- Avoids hashtags and requires a natural reference to the project in the thread.
+- Reuses an existing section image or hero image when possible, or generates a related social visual with the existing image pipeline.
+
+Output artifacts:
+
+- `threads/thread.json` for APIs, schedulers, or third-party social distribution tools.
+- `threads/thread.md` for manual review and copy/paste posting.
+
+Useful options:
+
+- `--section 2` chooses a section by 1-based index.
+- `--section-title "Why Lead Routing Breaks"` chooses a section by exact heading.
+- `--image-mode auto|reuse|generate|none` controls whether media is reused, generated, or skipped.
+- `--save-dir path/to/export` writes thread artifacts outside the default `output/.../threads` directory.
 
 ## Slideshow Workflow
 
@@ -186,4 +237,5 @@ run.sh              Repo-level entrypoint
 
 - Keep project credentials, unpublished outputs, and private screenshots local and out of git.
 - `cmsbot export-blog-draft` produces a portable artifact. Product repos are responsible for uploading images, rewriting URLs, inserting drafts, or posting to their CMS.
+- `cmsbot export-thread` produces posting-ready thread artifacts, but product repos remain responsible for publishing through their own API, scheduler, or social tooling.
 - `seo/` and `slideshow/` can be reused across projects without copying code when wrappers set `CMSBOT_PROJECT_FILE` and optional output-dir overrides.
