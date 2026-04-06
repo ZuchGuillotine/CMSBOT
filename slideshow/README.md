@@ -31,12 +31,14 @@ Optional project profile:
 ```bash
 python blog_to_slideshow.py --blog-file ../output/my-post/index.html --project-file ../projects/example-project.json
 python blog_to_slideshow.py --blog-slug how-we-handle-inbound-routing --project-file ../projects/example-project.json
+python blog_to_slideshow.py --brief-file ../briefs/q2-launch.md --project-file ../projects/example-project.json
 ```
 
 ## Full pipeline
 
 ```bash
 ./run_pipeline.sh --blog-slug how-we-handle-inbound-routing --project-file ../projects/example-project.json
+./run_pipeline.sh --brief-file ../briefs/q2-launch.md --project-file ../projects/example-project.json
 ./run_pipeline.sh --project-file ../projects/example-project.json --batch
 ```
 

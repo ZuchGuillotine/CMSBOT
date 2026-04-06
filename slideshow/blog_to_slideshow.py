@@ -8,10 +8,12 @@ multiple slideshow specifications ready for image generation and assembly.
 Usage:
   python blog_to_slideshow.py --blog-slug "how-to-build-a-supplement-stack"
   python blog_to_slideshow.py --blog-file ./content/my-post.html
+  python blog_to_slideshow.py --brief-file ./briefs/q2-launch.md
   python blog_to_slideshow.py --batch  # Process all unprocessed published posts
 """
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -19,7 +21,7 @@ import re
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -121,7 +123,11 @@ def load_blog_from_file(filepath: str) -> dict:
     path = Path(filepath)
     if path.suffix == ".json":
         with open(path) as f:
-            return json.load(f)
+            payload = json.load(f)
+            payload.setdefault("source_type", "blog")
+            payload.setdefault("slug", path.stem)
+            payload.setdefault("title", path.stem.replace("-", " ").title())
+            return payload
     elif path.suffix in (".html", ".htm", ".md"):
         with open(path) as f:
             content = f.read()
@@ -131,9 +137,43 @@ def load_blog_from_file(filepath: str) -> dict:
             "content": content,
             "category": "general",
             "tags": [],
+            "source_type": "blog",
         }
     else:
         raise ValueError(f"Unsupported file type: {path.suffix}")
+
+
+def load_brief_from_file(filepath: str) -> dict:
+    """Load a standalone slideshow brief from a local text or JSON file."""
+    path = Path(filepath)
+    if path.suffix == ".json":
+        with open(path) as f:
+            payload = json.load(f)
+        title = payload.get("title") or path.stem.replace("-", " ").title()
+        source_id = payload.get("source_id") or payload.get("slug") or path.stem
+        content = payload.get("content") or payload.get("brief") or ""
+        return {
+            "title": title,
+            "slug": source_id,
+            "content": content,
+            "category": payload.get("category", "project"),
+            "tags": payload.get("tags", []),
+            "source_type": payload.get("source_type", "brief"),
+        }
+
+    if path.suffix not in (".md", ".txt"):
+        raise ValueError(f"Unsupported brief type: {path.suffix}")
+
+    with open(path) as f:
+        content = f.read()
+    return {
+        "title": path.stem.replace("-", " ").title(),
+        "slug": path.stem,
+        "content": content,
+        "category": "project",
+        "tags": [],
+        "source_type": "brief",
+    }
 
 
 def load_blog_from_api(slug: str, api_base: str) -> dict:
@@ -144,7 +184,10 @@ def load_blog_from_api(slug: str, api_base: str) -> dict:
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read().decode())
-            return data.get("post", data)
+            payload = data.get("post", data)
+            if isinstance(payload, dict):
+                payload.setdefault("source_type", "blog")
+            return payload
     except Exception as e:
         print(f"[WARN] Could not fetch from API: {e}")
         return None
@@ -156,31 +199,109 @@ def strip_html(html: str) -> str:
     clean = re.sub(r"\s+", " ", clean).strip()
     return clean
 
+
+def source_id_for(payload: dict[str, Any]) -> str:
+    return str(payload.get("slug") or payload.get("source_id") or "slideshow-source")
+
+
+def source_type_for(payload: dict[str, Any]) -> str:
+    return str(payload.get("source_type") or "blog")
+
 # ---------------------------------------------------------------------------
-# Claude API Integration
+# LLM Integration
 # ---------------------------------------------------------------------------
 
-def call_claude(system_prompt: str, user_prompt: str, model: str = "claude-sonnet-4-6") -> str:
-    """Call the Anthropic Claude API. Requires ANTHROPIC_API_KEY env var."""
-    try:
-        import anthropic
-    except ImportError:
-        print("[ERROR] Install anthropic SDK: pip install anthropic")
-        sys.exit(1)
+async def call_llm(
+    system_prompt: str,
+    user_prompt: str,
+    provider_name: str,
+    model_override: str | None = None,
+    max_tokens: int = 4096,
+) -> str:
+    """Call the configured CMSBOT provider and return response text."""
+    config = Config.from_env()
+    provider = build_provider(provider_name, config)
+    if model_override:
+        provider.model = model_override
 
-    client = anthropic.Anthropic()  # Uses ANTHROPIC_API_KEY from env
-
-    message = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=system_prompt,
-        messages=[{"role": "user", "content": user_prompt}],
+    response = await provider.generate_simple(
+        user_prompt=user_prompt,
+        system_prompt=system_prompt,
+        max_tokens=max_tokens,
+        temperature=0.2,
     )
-    return message.content[0].text
+    return response.content
+
+
+def _strip_json_fences(raw: str) -> str:
+    json_str = raw.strip()
+    if json_str.startswith("```"):
+        json_str = re.sub(r"^```\w*\n?", "", json_str)
+        json_str = re.sub(r"\n?```$", "", json_str)
+    return json_str.strip()
+
+
+def _recover_truncated_specs(raw: str, source_id: str, source_type: str = "blog") -> dict | None:
+    """Recover complete slideshow objects from a truncated JSON response."""
+    json_str = _strip_json_fences(raw)
+    decoder = json.JSONDecoder()
+
+    start = json_str.find("{")
+    if start != -1:
+        try:
+            payload, _ = decoder.raw_decode(json_str[start:])
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+    slideshows_key = json_str.find('"slideshows"')
+    if slideshows_key == -1:
+        return None
+
+    array_start = json_str.find("[", slideshows_key)
+    if array_start == -1:
+        return None
+
+    slideshows = []
+    cursor = array_start + 1
+    while cursor < len(json_str):
+        while cursor < len(json_str) and json_str[cursor] in " \r\n\t,":
+            cursor += 1
+        if cursor >= len(json_str) or json_str[cursor] == "]":
+            break
+
+        try:
+            item, end = decoder.raw_decode(json_str, cursor)
+        except json.JSONDecodeError:
+            break
+
+        if isinstance(item, dict):
+            slideshows.append(item)
+        cursor = end
+
+    if not slideshows:
+        return None
+
+    source_blog_match = re.search(r'"source_blog"\s*:\s*"([^"]+)"', json_str)
+    source_id_match = re.search(r'"source_id"\s*:\s*"([^"]+)"', json_str)
+    source_type_match = re.search(r'"source_type"\s*:\s*"([^"]+)"', json_str)
+    generated_match = re.search(r'"generated_at"\s*:\s*"([^"]+)"', json_str)
+
+    recovered = {
+        "source_id": source_id_match.group(1) if source_id_match else source_id,
+        "source_type": source_type_match.group(1) if source_type_match else source_type,
+        "generated_at": generated_match.group(1) if generated_match else datetime.now().isoformat(),
+        "slideshows": slideshows,
+        "recovered_from_truncation": True,
+    }
+    if recovered["source_type"] == "blog":
+        recovered["source_blog"] = source_blog_match.group(1) if source_blog_match else recovered["source_id"]
+    return recovered
 
 
 def generate_slideshow_specs(
-    blog: dict,
+    source: dict,
     config: dict,
     hook_prompt: str,
     provider_name: str,
@@ -188,7 +309,7 @@ def generate_slideshow_specs(
     max_tokens: int = 4096,
     screenshot_prompt_block: str | None = None,
 ) -> dict:
-    """Use an LLM provider to extract slideshow specs from a blog post."""
+    """Use an LLM provider to extract slideshow specs from source material."""
 
     formats_json = json.dumps(config["formats"], indent=2)
     banned_words = ", ".join(config["content_rules"]["banned_words"])
@@ -197,6 +318,9 @@ def generate_slideshow_specs(
     brand_name = config["brand"]["name"]
     tagline = config["brand"].get("tagline", "")
     website = config["brand"].get("urls", {}).get("website", "")
+    source_id = source_id_for(source)
+    source_type = source_type_for(source)
+    source_label = "blog post" if source_type == "blog" else "project brief"
 
     system_prompt = f"""You are a TikTok/Instagram slideshow content strategist for {brand_name}.
 Brand summary: {tagline}
@@ -223,14 +347,16 @@ SCREENSHOT RULES:
 {screenshot_prompt_block or "No validated screenshot manifest is available. Use ai_lifestyle and never invent screenshot_ref values."}
 """
 
-    user_prompt = f"""Analyze this blog post and generate slideshow specifications.
+    user_prompt = f"""Analyze this {source_label} and generate slideshow specifications.
 
-BLOG TITLE: {blog['title']}
-BLOG CATEGORY: {blog.get('category', 'general')}
-BLOG TAGS: {json.dumps(blog.get('tags', []))}
+SOURCE TYPE: {source_type}
+SOURCE ID: {source_id}
+SOURCE TITLE: {source['title']}
+SOURCE CATEGORY: {source.get('category', 'general')}
+SOURCE TAGS: {json.dumps(source.get('tags', []))}
 
-BLOG CONTENT (stripped):
-{strip_html(blog['content'])[:6000]}
+SOURCE CONTENT (stripped):
+{strip_html(source['content'])[:6000]}
 
 ---
 
@@ -250,7 +376,8 @@ For each slideshow, output:
 
 Output as a valid JSON object with this structure:
 {{
-  "source_blog": "{blog['slug']}",
+  "source_id": "{source_id}",
+  "source_type": "{source_type}",
   "generated_at": "{datetime.now().isoformat()}",
   "slideshows": [
     {{
@@ -292,16 +419,26 @@ Return ONLY valid JSON, no markdown code fences."""
 
     # Try to parse JSON from response
     try:
-        # Handle potential markdown fences
-        json_str = response.strip()
-        if json_str.startswith("```"):
-            json_str = re.sub(r"^```\w*\n?", "", json_str)
-            json_str = re.sub(r"\n?```$", "", json_str)
-        return json.loads(json_str)
+        json_str = _strip_json_fences(response)
+        parsed = json.loads(json_str)
     except json.JSONDecodeError as e:
-        print(f"[WARN] Failed to parse Claude response as JSON: {e}")
+        recovered = _recover_truncated_specs(response, source_id, source_type)
+        if recovered is not None:
+            print(
+                "[WARN] Recovered "
+                f"{len(recovered.get('slideshows', []))} slideshow(s) from a truncated JSON response"
+            )
+            return recovered
+
+        print(f"[WARN] Failed to parse provider response as JSON: {e}")
         print(f"[DEBUG] Raw response:\n{response[:500]}")
-        return {"source_blog": blog["slug"], "slideshows": [], "error": str(e), "raw": response}
+        parsed = {"source_id": source_id, "source_type": source_type, "slideshows": [], "error": str(e), "raw": response}
+
+    parsed.setdefault("source_id", source_id)
+    parsed.setdefault("source_type", source_type)
+    if parsed["source_type"] == "blog":
+        parsed.setdefault("source_blog", parsed["source_id"])
+    return parsed
 
 # ---------------------------------------------------------------------------
 # Quality Checks
@@ -352,8 +489,9 @@ def save_batch(specs: dict, config: dict) -> Path:
     batch_dir.mkdir(parents=True, exist_ok=True)
 
     # Save full specs
-    slug = specs["source_blog"]
-    output_path = batch_dir / f"{slug}_slideshows.json"
+    source_id = specs.get("source_id") or specs.get("source_blog") or "slideshow-source"
+    source_type = specs.get("source_type") or ("blog" if specs.get("source_blog") else "brief")
+    output_path = batch_dir / f"{source_id}_slideshows.json"
     with open(output_path, "w") as f:
         json.dump(specs, f, indent=2)
 
@@ -384,12 +522,15 @@ def save_batch(specs: dict, config: dict) -> Path:
         metadata = {
             "id": show["id"],
             "format": show.get("format", ""),
-            "source_blog": slug,
+            "source_id": source_id,
+            "source_type": source_type,
             "generated_at": specs.get("generated_at", datetime.now().isoformat()),
             "platforms": show.get("target_platforms", ["tiktok", "instagram"]),
             "status": "generated",
             "warnings": validate_slideshow(show, config),
         }
+        if source_type == "blog":
+            metadata["source_blog"] = specs.get("source_blog") or source_id
         with open(show_dir / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
 
@@ -413,8 +554,8 @@ def save_processed_slug(slug: str):
 # Main
 # ---------------------------------------------------------------------------
 
-def process_blog(
-    blog: dict,
+def process_source(
+    source: dict,
     config: dict,
     hook_prompt: str,
     provider_name: str,
@@ -424,16 +565,16 @@ def process_blog(
     screenshot_manifest: dict | None = None,
     screenshot_refs: list[str] | None = None,
 ) -> Path:
-    """Full pipeline: blog → slideshow specs → saved output."""
+    """Full pipeline: source material → slideshow specs → saved output."""
     print(f"\n{'='*60}")
-    print(f"Processing: {blog['title']}")
+    print(f"Processing: {source['title']}")
     print(f"{'='*60}")
 
     # Generate specs
     provider_label = model_override or provider_name
     print(f"[1/3] Generating slideshow specs with {provider_label} (max_tokens={max_tokens})...")
     specs = generate_slideshow_specs(
-        blog,
+        source,
         config,
         hook_prompt,
         provider_name=provider_name,
@@ -475,7 +616,8 @@ def process_blog(
     if total_warnings == 0:
         print("✓ All quality checks passed")
 
-    save_processed_slug(blog["slug"])
+    if source_type_for(source) == "blog":
+        save_processed_slug(source_id_for(source))
     return batch_dir
 
 
@@ -484,10 +626,14 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--blog-slug", help="Fetch blog by slug from API")
     group.add_argument("--blog-file", help="Load blog from local file (JSON, HTML, or MD)")
+    group.add_argument("--brief-file", help="Load a standalone slideshow brief (JSON, MD, or TXT)")
     group.add_argument("--batch", action="store_true", help="Process all unprocessed published posts")
     parser.add_argument("--api-base", default=None, help="API base URL")
     parser.add_argument("--project-file", default=None, help="Path to a CMSBOT project profile JSON file")
     parser.add_argument("--force", action="store_true", help="Re-process even if already done")
+    parser.add_argument("--provider", default="anthropic", help="LLM provider for spec generation")
+    parser.add_argument("--model", default=None, help="Model override for the provider")
+    parser.add_argument("--max-tokens", type=int, default=16384, help="Max output tokens")
 
     args = parser.parse_args()
     config = config_from_project(args.project_file)
@@ -505,8 +651,22 @@ def main():
 
     if args.blog_file:
         blog = load_blog_from_file(args.blog_file)
-        process_blog(
+        process_source(
             blog,
+            config,
+            hook_prompt,
+            provider_name=args.provider,
+            model_override=args.model,
+            max_tokens=args.max_tokens,
+            screenshot_dir=screenshot_dir,
+            screenshot_manifest=screenshot_manifest,
+            screenshot_refs=screenshot_refs,
+        )
+
+    elif args.brief_file:
+        brief = load_brief_from_file(args.brief_file)
+        process_source(
+            brief,
             config,
             hook_prompt,
             provider_name=args.provider,
@@ -523,7 +683,7 @@ def main():
             sys.exit(1)
         blog = load_blog_from_api(args.blog_slug, api_base)
         if blog:
-            process_blog(
+            process_source(
                 blog,
                 config,
                 hook_prompt,
@@ -563,7 +723,7 @@ def main():
             # Fetch full content
             full = load_blog_from_api(post["slug"], api_base)
             if full:
-                process_blog(
+                process_source(
                     full,
                     config,
                     hook_prompt,

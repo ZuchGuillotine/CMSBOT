@@ -3,17 +3,20 @@
 #
 # Usage:
 #   ./run_pipeline.sh --blog-slug "how-to-build-a-supplement-stack"
+#   ./run_pipeline.sh --brief-file ./briefs/q2-launch.md
 #   ./run_pipeline.sh --batch          # Process all unprocessed blog posts
 #   ./run_pipeline.sh --batch --prompt-only  # Generate everything except images
 #   ./run_pipeline.sh --project-file ../projects/example-project.json --batch
 #
 # Environment variables required:
 #   ANTHROPIC_API_KEY  — For Claude (hook/text generation)
-#   GOOGLE_API_KEY     — For Nano Banana Pro (image generation) [optional if --prompt-only]
+#   GOOGLE_API_KEY or GEMINI_API_KEY — For Nano Banana Pro (image generation) [optional if --prompt-only]
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+VENV_PYTHON="${VENV_PYTHON:-$REPO_ROOT/.venv/bin/python}"
 OUTPUT_DIR="${CMSBOT_SLIDESHOW_OUTPUT_DIR:-$SCRIPT_DIR/output}"
 DATE=$(date +%Y-%m-%d)
 BATCH_DIR="$OUTPUT_DIR/batch_$DATE"
@@ -32,6 +35,7 @@ step() { echo -e "\n${BLUE}━━━ STEP $1 ━━━${NC}"; }
 
 # Parse arguments
 BLOG_SLUG=""
+BRIEF_FILE=""
 BATCH_MODE=false
 PROMPT_ONLY=false
 SKIP_IMAGES=false
@@ -43,6 +47,7 @@ BLOG_ARGS=()
 while [[ $# -gt 0 ]]; do
   case $1 in
     --blog-slug) BLOG_SLUG="$2"; shift 2 ;;
+    --brief-file) BRIEF_FILE="$2"; shift 2 ;;
     --batch) BATCH_MODE=true; shift ;;
     --prompt-only) PROMPT_ONLY=true; shift ;;
     --skip-images) SKIP_IMAGES=true; shift ;;
@@ -61,9 +66,20 @@ if [[ -n "$API_BASE" ]]; then
   BLOG_ARGS+=(--api-base "$API_BASE")
 fi
 
+if [[ ! -x "$VENV_PYTHON" ]]; then
+  error "Virtualenv Python not found: $VENV_PYTHON"
+  error "Run: $REPO_ROOT/run.sh bootstrap"
+  exit 1
+fi
+
 # Validate
-if [[ -z "$BLOG_SLUG" && "$BATCH_MODE" == "false" ]]; then
-  error "Must specify --blog-slug <slug> or --batch"
+if [[ -n "$BRIEF_FILE" && "$BATCH_MODE" == "true" ]]; then
+  error "Cannot combine --brief-file with --batch"
+  exit 1
+fi
+
+if [[ -z "$BLOG_SLUG" && -z "$BRIEF_FILE" && "$BATCH_MODE" == "false" ]]; then
+  error "Must specify --blog-slug <slug>, --brief-file <path>, or --batch"
   exit 1
 fi
 
@@ -72,8 +88,8 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   exit 1
 fi
 
-if [[ "$PROMPT_ONLY" == "false" && "$SKIP_IMAGES" == "false" && -z "${GOOGLE_API_KEY:-}" ]]; then
-  warn "GOOGLE_API_KEY not set — will generate prompts only for AI images"
+if [[ "$PROMPT_ONLY" == "false" && "$SKIP_IMAGES" == "false" && -z "${GOOGLE_API_KEY:-}" && -z "${GEMINI_API_KEY:-}" ]]; then
+  warn "GOOGLE_API_KEY / GEMINI_API_KEY not set — will generate prompts only for AI images"
   PROMPT_ONLY=true
 fi
 
@@ -83,10 +99,13 @@ step "1: Blog → Slideshow Specs"
 
 if [[ -n "$BLOG_SLUG" ]]; then
   log "Processing single blog: $BLOG_SLUG"
-  python3 "$SCRIPT_DIR/blog_to_slideshow.py" --blog-slug "$BLOG_SLUG" "${BLOG_ARGS[@]}"
+  "$VENV_PYTHON" "$SCRIPT_DIR/blog_to_slideshow.py" --blog-slug "$BLOG_SLUG" "${BLOG_ARGS[@]}"
+elif [[ -n "$BRIEF_FILE" ]]; then
+  log "Processing standalone brief: $BRIEF_FILE"
+  "$VENV_PYTHON" "$SCRIPT_DIR/blog_to_slideshow.py" --brief-file "$BRIEF_FILE" "${BLOG_ARGS[@]}"
 elif [[ "$BATCH_MODE" == "true" ]]; then
   log "Processing all unprocessed blog posts..."
-  python3 "$SCRIPT_DIR/blog_to_slideshow.py" --batch "${BLOG_ARGS[@]}"
+  "$VENV_PYTHON" "$SCRIPT_DIR/blog_to_slideshow.py" --batch "${BLOG_ARGS[@]}"
 fi
 
 # Find the batch directory (just created)
@@ -113,12 +132,12 @@ if [[ "$SKIP_IMAGES" == "true" ]]; then
   log "Skipping image generation (--skip-images)"
 elif [[ "$PROMPT_ONLY" == "true" ]]; then
   log "Generating image prompts only (--prompt-only)"
-  python3 "$SCRIPT_DIR/generate_images.py" --batch "$BATCH_DIR" --prompt-only
+  "$VENV_PYTHON" "$SCRIPT_DIR/generate_images.py" --batch "$BATCH_DIR" --prompt-only
   log "Prompts saved to $BATCH_DIR/all_prompts.json"
-  warn "To generate actual images, run: python3 generate_images.py --batch $BATCH_DIR"
+  warn "To generate actual images, run: $VENV_PYTHON $SCRIPT_DIR/generate_images.py --batch $BATCH_DIR"
 else
   log "Generating AI images with Nano Banana Pro..."
-  python3 "$SCRIPT_DIR/generate_images.py" --batch "$BATCH_DIR"
+  "$VENV_PYTHON" "$SCRIPT_DIR/generate_images.py" --batch "$BATCH_DIR"
 fi
 
 # ─────────────────────────────────────────────────
@@ -130,11 +149,11 @@ IMAGE_COUNT=$(find "$BATCH_DIR" -path "*/images/*" \( -name "*.jpg" -o -name "*.
 
 if [[ "$IMAGE_COUNT" -gt 0 ]]; then
   log "Post-processing $IMAGE_COUNT images (film grain, compression, metadata strip)..."
-  python3 "$SCRIPT_DIR/postprocess.py" --batch "$BATCH_DIR"
+  "$VENV_PYTHON" "$SCRIPT_DIR/postprocess.py" --batch "$BATCH_DIR"
 else
   warn "No images found to post-process."
   warn "Add your app screenshots to: $SCRIPT_DIR/screenshots/"
-  warn "Then re-run: python3 generate_images.py --batch $BATCH_DIR"
+  warn "Then re-run: $VENV_PYTHON $SCRIPT_DIR/generate_images.py --batch $BATCH_DIR"
 fi
 
 # ─────────────────────────────────────────────────
@@ -144,7 +163,7 @@ step "4: Build Review Page"
 if [[ "$SKIP_REVIEW" == "true" ]]; then
   log "Skipping review page (--skip-review)"
 else
-  python3 "$SCRIPT_DIR/build_review.py" --batch "$BATCH_DIR"
+  "$VENV_PYTHON" "$SCRIPT_DIR/build_review.py" --batch "$BATCH_DIR"
   log "Review page: file://$BATCH_DIR/review.html"
 fi
 
@@ -163,8 +182,8 @@ echo "  4. Post images from the processed/ folder (or images/ if no post-process
 echo ""
 if [[ "$PROMPT_ONLY" == "true" ]]; then
   echo -e "${YELLOW}NOTE: Image generation was skipped. To generate images:${NC}"
-  echo "  export GOOGLE_API_KEY=your_key"
-  echo "  python3 $SCRIPT_DIR/generate_images.py --batch $BATCH_DIR"
+  echo "  export GOOGLE_API_KEY=your_key  # or GEMINI_API_KEY"
+  echo "  $VENV_PYTHON $SCRIPT_DIR/generate_images.py --batch $BATCH_DIR"
   echo ""
 fi
 echo "Screenshots needed? Check each slideshow's script.txt for [Image: app_screenshot] entries."

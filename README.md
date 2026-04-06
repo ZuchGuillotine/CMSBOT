@@ -197,6 +197,7 @@ Useful options:
 
 ```bash
 ./run.sh slideshow specs --blog-file output/lead-routing-mistakes/index.html --project-file projects/northstar-crm.json
+./run.sh slideshow specs --brief-file briefs/q2-launch.md --project-file projects/northstar-crm.json
 ./run.sh slideshow pipeline --project-file projects/northstar-crm.json --batch
 ```
 

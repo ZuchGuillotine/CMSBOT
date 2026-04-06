@@ -14,11 +14,10 @@ Requires: GOOGLE_API_KEY environment variable for Gemini API access.
 """
 
 import argparse
-import base64
+import asyncio
 import json
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from shutil import copy2
@@ -29,6 +28,13 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from cmsbot.screenshots import load_manifest, resolve_screenshot_ref
+from cmsbot.config import Config
+from cmsbot.providers.image_providers import (
+    DalleImageProvider,
+    GrokImageProvider,
+    ImageProvider,
+    NanobananProvider,
+)
 
 CONFIG_PATH = SCRIPT_DIR / "config.json"
 TEMPLATES_DIR = SCRIPT_DIR / "prompts" / "image_json_templates"
@@ -164,6 +170,12 @@ def build_full_prompt(scene_key: str, custom_subject: str = None) -> dict:
     return template
 
 
+def sanitize_filename_fragment(text: str, fallback: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in text.strip().lower())
+    cleaned = "_".join(part for part in cleaned.split("_") if part)
+    return cleaned[:40] or fallback
+
+
 def image_note_to_scene(image_note: str) -> tuple[str, Optional[str]]:
     """Map a slide's image_note to a scene template key and optional custom subject."""
     note_lower = image_note.lower()
@@ -205,62 +217,89 @@ def image_note_to_scene(image_note: str) -> tuple[str, Optional[str]]:
     return "kitchen_supplements", image_note
 
 
+def build_generation_prompt(
+    show: dict,
+    slide: dict,
+    prompt_json: dict,
+) -> str:
+    """Build a slide-aware prompt so each generated image matches the slideshow context."""
+    hook = show.get("hook", "").strip()
+    format_id = show.get("format", "").strip()
+    text_overlay = slide.get("text_overlay", "").strip()
+    image_note = slide.get("image_note", "").strip()
+    slide_num = slide.get("slide_num", "")
+    cta_note = ""
+    if slide.get("is_cta"):
+        cta_note = "This is the CTA slide. Keep the scene visually inviting and action-oriented."
+
+    directive = f"""Generate a photorealistic vertical slideshow image for social media.
+The image should look like a candid phone photo, not polished studio photography and not an AI render.
+
+Slideshow context:
+- Slideshow ID: {show.get('id', '')}
+- Format: {format_id}
+- Hook: {hook}
+- Slide number: {slide_num}
+- Overlay text that will be added later in the app: {text_overlay}
+- Visual direction: {image_note}
+- {cta_note or "This is an editorial content slide, not a CTA graphic."}
+
+Follow every detail in this JSON scene specification exactly:
+{json.dumps(prompt_json, indent=2)}
+
+Constraints:
+- Portrait orientation, 9:16 framing
+- Leave practical negative space for later text overlay, but do not render any text in-image
+- No UI chrome, dashboards, screenshots, labels, logos, watermarks, or borders
+- The scene must feel specific to this slide, not generic stock content"""
+    return directive
+
+
 # ---------------------------------------------------------------------------
 # Gemini API Integration (Nano Banana Pro)
 # ---------------------------------------------------------------------------
 
-def generate_image_gemini(prompt_json: dict, output_path: Path) -> bool:
-    """Generate an image using Google Gemini's image generation API."""
-    api_key = os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        print("[ERROR] GOOGLE_API_KEY not set")
-        return False
+def build_raster_image_providers() -> list[ImageProvider]:
+    """Build slideshow image providers in priority order, matching the main pipeline."""
+    config = Config.from_env()
+    providers: list[ImageProvider] = []
 
-    try:
-        import google.generativeai as genai
-    except ImportError:
-        print("[ERROR] Install google-generativeai: pip install google-generativeai")
-        return False
+    if config.xai_key:
+        providers.append(GrokImageProvider(api_key=config.xai_key))
 
-    genai.configure(api_key=api_key)
-
-    # Convert JSON prompt to a text prompt for Gemini
-    text_prompt = json.dumps(prompt_json, indent=2)
-    full_prompt = f"""Generate a photorealistic image based on this specification.
-The image should look like it was taken with a phone camera, not AI-generated.
-Follow every detail in the JSON exactly:
-
-{text_prompt}
-
-CRITICAL: The image must look like a candid phone photo, NOT an AI render.
-No text, watermarks, or logos in the image. Portrait orientation (9:16 aspect ratio)."""
-
-    try:
-        # Use Gemini with image generation capability
-        model = genai.GenerativeModel("gemini-2.0-flash-exp")  # Or latest image-capable model
-        response = model.generate_content(
-            full_prompt,
-            generation_config=genai.GenerationConfig(
-                response_mime_type="image/jpeg",
-            ),
+    if config.gemini:
+        providers.append(
+            NanobananProvider(
+                api_key=config.gemini.api_key,
+                model=os.environ.get("CMSBOT_SLIDESHOW_IMAGE_MODEL", "gemini-3-pro-image-preview"),
+            )
         )
 
-        # Save the generated image
-        if response.candidates and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, "inline_data") and part.inline_data:
-                    image_data = base64.b64decode(part.inline_data.data)
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(output_path, "wb") as f:
-                        f.write(image_data)
-                    return True
+    if len(providers) < 2 and config.openai:
+        providers.append(DalleImageProvider(api_key=config.openai.api_key))
 
-        print(f"  [WARN] No image in response for {output_path.name}")
-        return False
+    return providers
 
-    except Exception as e:
-        print(f"  [ERROR] Image generation failed: {e}")
-        return False
+
+def generate_image(prompt_text: str, output_path: Path) -> tuple[bool, str | None]:
+    """Generate a slideshow image using the first available working provider."""
+    providers = build_raster_image_providers()
+    if not providers:
+        print("[ERROR] No image providers configured. Set GEMINI_API_KEY, OPENAI_API_KEY, or XAI_API_KEY.")
+        return False, None
+
+    for provider in providers:
+        try:
+            result = asyncio.run(provider.generate(prompt_text, size="1024x1792"))
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "wb") as f:
+                f.write(result.image_bytes)
+            return True, result.provider
+        except Exception as e:
+            print(f"  [WARN] {provider.name} failed: {e}")
+
+    print("  [ERROR] Image generation failed across all configured providers")
+    return False, None
 
 
 # ---------------------------------------------------------------------------
@@ -283,18 +322,19 @@ def process_spec_file(spec_path: Path, prompt_only: bool = False) -> dict:
 
         print(f"\n  Slideshow: {show_id}")
 
-        all_slides = show.get("slides", [])
+        all_slides = list(show.get("slides", []))
         if "cta_slide" in show:
             cta = show["cta_slide"].copy()
             cta["slide_num"] = len(all_slides) + 1
-            cta["image_note"] = cta.get("screenshot_ref", "app overview")
+            cta["image_note"] = cta.get("image_note") or cta.get("screenshot_ref", "app overview")
+            cta["is_cta"] = True
             all_slides.append(cta)
 
         for slide in all_slides:
             num = slide["slide_num"]
             img_type = slide.get("image_type", "ai_lifestyle")
             img_note = slide.get("image_note", "")
-            filename = f"{num:02d}_{img_note.replace(' ', '_')[:30]}.jpg"
+            filename = f"{num:02d}_{sanitize_filename_fragment(img_note or slide.get('text_overlay', ''), 'slide')}.jpg"
             output_path = images_dir / filename
 
             if img_type == "app_screenshot":
@@ -321,12 +361,14 @@ def process_spec_file(spec_path: Path, prompt_only: bool = False) -> dict:
 
             # AI image generation
             scene_key, custom_subject = image_note_to_scene(img_note)
-            prompt = build_full_prompt(scene_key, custom_subject)
+            prompt_json = build_full_prompt(scene_key, custom_subject)
+            prompt_text = build_generation_prompt(show, slide, prompt_json)
             results["prompts"].append({
                 "slideshow": show_id,
                 "slide": num,
                 "scene": scene_key,
-                "prompt": prompt,
+                "prompt_json": prompt_json,
+                "prompt_text": prompt_text,
                 "output": str(output_path),
             })
 
@@ -335,9 +377,10 @@ def process_spec_file(spec_path: Path, prompt_only: bool = False) -> dict:
                 continue
 
             print(f"    Slide {num}: generating ({scene_key})...", end=" ", flush=True)
-            success = generate_image_gemini(prompt, output_path)
+            success, provider_name = generate_image(prompt_text, output_path)
             if success:
-                print("✓")
+                provider_label = provider_name or "image-provider"
+                print(f"✓ ({provider_label})")
                 results["generated"] += 1
             else:
                 print("✗")

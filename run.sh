@@ -7,6 +7,7 @@
 #   ./run.sh project init "Northstar CRM"
 #   ./run.sh topics --project-file projects/example-project.json
 #   ./run.sh export-blog-draft output/my-post
+#   ./run.sh screenshots list --project-file projects/example-project.json
 #   ./run.sh seo research
 #   ./run.sh slideshow pipeline --project-file projects/example-project.json --batch
 
@@ -36,7 +37,7 @@ case "${1:-help}" in
     "$BOOTSTRAP_SCRIPT"
     ;;
 
-  generate|check|styles|models|topics|project|export-blog-draft)
+  generate|check|styles|models|topics|project|export-blog-draft|screenshots)
     run_cmsbot "$@"
     ;;
 
@@ -117,6 +118,7 @@ Commands:
   ./run.sh project <init|context|voice> [args...]
   ./run.sh topics [args...]
   ./run.sh export-blog-draft <output_dir> [args...]
+  ./run.sh screenshots <describe|list|validate|add> [args...]
   ./run.sh seo <research|autocomplete|reddit|competitors|evaluate|evaluate:gsc|evaluate:ga4|test:connectivity> [args...]
   ./run.sh slideshow <specs|images|postprocess|review|pipeline|track> [args...]
 
@@ -126,6 +128,7 @@ Examples:
   ./run.sh project init "Northstar CRM"
   ./run.sh topics --project-file projects/example-project.json
   ./run.sh export-blog-draft output/n-of-1-experiments
+  ./run.sh screenshots list --project-file projects/example-project.json
   ./run.sh seo research
   ./run.sh slideshow pipeline --project-file ../projects/example-project.json --batch
 EOF
