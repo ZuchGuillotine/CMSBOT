@@ -192,6 +192,9 @@ def write_asset_manifest(
             if (root / "analytics").exists() and layout.layout == "asset_set"
             else None
         ),
+        "analytics_keys": {
+            "asset_set_id": layout.asset_set_id,
+        },
         "images": [
             {
                 "placement": image.placement,
@@ -222,6 +225,7 @@ def build_content_calendar(
     seo: dict[str, Any],
     start_date: date,
     days: int,
+    analytics_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     pillars = [pillar for pillar in content_ops.get("pillars", []) if isinstance(pillar, dict)]
     if not pillars:
@@ -235,6 +239,8 @@ def build_content_calendar(
     timezone = str(cadence.get("timezone") or "America/Los_Angeles")
     default_formats = [fmt for fmt in content_ops.get("default_formats", []) if isinstance(fmt, str)]
     fallback_topics = _build_topic_pool(seo)
+    analytics_signals = _summarize_analytics_signals(analytics_records or [])
+    pillars = _prioritize_pillars(pillars, analytics_signals)
 
     entries: list[dict[str, Any]] = []
     for day_index in range(days):
@@ -249,6 +255,7 @@ def build_content_calendar(
             day_index=day_index,
         )
         formats = [fmt for fmt in pillar.get("default_formats", []) if isinstance(fmt, str)] or default_formats or ["blog"]
+        formats = _prioritize_formats(formats, analytics_signals)
         goal_list = [str(goal).strip() for goal in pillar.get("goals", []) if str(goal).strip()]
         outcome = goal_list[day_index % len(goal_list)] if goal_list else "awareness"
 
@@ -260,9 +267,10 @@ def build_content_calendar(
             "outcome": outcome,
             "arc": f"{pillar_key}-week-{((day_index // 7) + 1)}",
             "topic": topic,
-            "hook_angles": _build_hook_angles(topic, pillar_label),
+            "hook_angles": _build_hook_angles(topic, pillar_label, analytics_signals=analytics_signals),
             "asset_set": formats,
             "distribution_slots": _build_distribution_slots(
+                entry_id=f"{current_day.isoformat()}-{pillar_key}-{slugify_token(topic, max_length=36)}",
                 current_day=current_day,
                 schedule=schedule,
                 formats=formats,
@@ -277,6 +285,7 @@ def build_content_calendar(
         "timezone": timezone,
         "start_date": start_date.isoformat(),
         "days": days,
+        "analytics_signals": analytics_signals,
         "entries": entries,
     }
 
@@ -352,16 +361,26 @@ def _pick_topic(
     return f"{label} topic for {project_name}"
 
 
-def _build_hook_angles(topic: str, pillar_label: str) -> list[str]:
-    return [
+def _build_hook_angles(
+    topic: str,
+    pillar_label: str,
+    *,
+    analytics_signals: dict[str, Any] | None = None,
+) -> list[str]:
+    angles = [
         f"The common mistake behind {topic}",
         f"What most teams miss about {topic}",
         f"How {pillar_label.lower()} content turns {topic} into an actionable system",
     ]
+    hooks = analytics_signals.get("top_hooks", []) if analytics_signals else []
+    if hooks:
+        angles.append(f"Adapt this winning hook style: {hooks[0]['key']}")
+    return angles
 
 
 def _build_distribution_slots(
     *,
+    entry_id: str,
     current_day: date,
     schedule: list[dict[str, Any]],
     formats: list[str],
@@ -380,6 +399,7 @@ def _build_distribution_slots(
             publish_at = datetime.combine(slot_day, slot_time).isoformat()
             slots.append(
                 {
+                    "slot_id": f"{entry_id}:{fmt_key}:{len(slots) + 1}",
                     "platform": str(item.get("platform") or DEFAULT_FORMAT_PLATFORM.get(fmt_key, fmt_key)),
                     "format": fmt_key,
                     "publish_at": publish_at,
@@ -395,3 +415,66 @@ def _parse_clock(value: str) -> time:
         return time(hour=int(hour), minute=int(minute))
     except Exception:
         return time(hour=9, minute=0)
+
+
+def _summarize_analytics_signals(records: list[dict[str, Any]]) -> dict[str, Any]:
+    pillar_scores: dict[str, list[float]] = {}
+    format_scores: dict[str, list[float]] = {}
+    hook_scores: dict[str, list[float]] = {}
+
+    for record in records:
+        score = float(record.get("performance_score", 0) or 0)
+        pillar = str(record.get("pillar") or "").strip()
+        fmt = str(record.get("format") or "").strip()
+        hook = str(record.get("hook") or "").strip()
+        if pillar:
+            pillar_scores.setdefault(pillar, []).append(score)
+        if fmt:
+            format_scores.setdefault(fmt, []).append(score)
+        if hook:
+            hook_scores.setdefault(hook, []).append(score)
+
+    return {
+        "top_pillars": _rank_score_map(pillar_scores),
+        "top_formats": _rank_score_map(format_scores),
+        "top_hooks": _rank_score_map(hook_scores, limit=5),
+    }
+
+
+def _rank_score_map(score_map: dict[str, list[float]], *, limit: int = 10) -> list[dict[str, Any]]:
+    ranked: list[dict[str, Any]] = []
+    for key, scores in score_map.items():
+        if not scores:
+            continue
+        ranked.append(
+            {
+                "key": key,
+                "average_score": round(sum(scores) / len(scores), 2),
+                "count": len(scores),
+            }
+        )
+    ranked.sort(key=lambda item: (item["average_score"], item["count"]), reverse=True)
+    return ranked[:limit]
+
+
+def _prioritize_pillars(pillars: list[dict[str, Any]], analytics_signals: dict[str, Any]) -> list[dict[str, Any]]:
+    top_pillars = analytics_signals.get("top_pillars", [])
+    if not top_pillars:
+        return pillars
+    scores = {item["key"]: item["average_score"] for item in top_pillars}
+    return sorted(
+        pillars,
+        key=lambda pillar: scores.get(
+            slugify_token(str(pillar.get("key") or pillar.get("label") or "")),
+            0,
+        ),
+        reverse=True,
+    )
+
+
+def _prioritize_formats(formats: list[str], analytics_signals: dict[str, Any]) -> list[str]:
+    top_formats = analytics_signals.get("top_formats", [])
+    if not top_formats:
+        return formats
+    scores = {item["key"]: item["average_score"] for item in top_formats}
+    return sorted(formats, key=lambda fmt: scores.get(fmt, 0), reverse=True)

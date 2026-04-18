@@ -56,6 +56,7 @@ This is the main contract consumed by the core. It should define:
 - brand identity and audience
 - voice and content rules
 - SEO seeds, competitors, analytics identifiers, and blog base URL
+- `content_ops` pillars, cadence, and default format mix for recurring planning
 - slideshow CTA variants, banned words, screenshot refs, and platform list
 - `screenshot_refs` should mirror manifest keys that are safe for the slideshow pipeline to use
 
@@ -158,24 +159,37 @@ The wrapper should be the only supported entrypoint inside the product repo.
 ```bash
 scripts/cmsbot bootstrap
 scripts/cmsbot generate "Write about magnesium timing"
+scripts/cmsbot calendar plan --project-file marketing/cmsbot/project.json --days 30
+scripts/cmsbot calendar show
 scripts/cmsbot topics
+scripts/cmsbot export-thread marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example --project-file marketing/cmsbot/project.json
+scripts/cmsbot export-carousel marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example --project-file marketing/cmsbot/project.json --platform instagram
+scripts/cmsbot export-video-script marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example --project-file marketing/cmsbot/project.json --platform tiktok
+scripts/cmsbot analytics log-social --asset-set-id 2026-04-18-example --platform instagram --format carousel --views-7d 25000 --saves 1200
+scripts/cmsbot analytics report --days 30
 scripts/cmsbot seo research
 scripts/cmsbot seo evaluate
-scripts/cmsbot slideshow specs --blog-file marketing/cmsbot/output/my-post/index.html
+scripts/cmsbot slideshow specs --blog-file marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example/source/index.html
 scripts/cmsbot screenshots describe --project-file marketing/cmsbot/project.json
 scripts/cmsbot screenshots list --project-file marketing/cmsbot/project.json
 scripts/cmsbot screenshots validate --project-file marketing/cmsbot/project.json
-scripts/cmsbot export-blog-draft marketing/cmsbot/output/my-post
-scripts/cmsbot publish-blog-draft marketing/cmsbot/output/my-post
-scripts/cmsbot insert-blog-draft marketing/cmsbot/output/my-post --dry-run
+scripts/cmsbot export-blog-draft marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example
+scripts/cmsbot publish-blog-draft marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example
+scripts/cmsbot insert-blog-draft marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example --dry-run
 ```
 
 ## Portable Artifacts
 
 The shared core should only emit portable artifacts:
 
+- asset-set manifests and source briefs
 - generated HTML output
 - `blog_draft.json`
+- thread export artifacts
+- carousel export artifacts
+- video script export artifacts
+- `content-calendar.json`
+- `performance-index.json`
 - `topic_briefs_*.json`
 - slideshow spec JSON
 - `review.html`
@@ -201,13 +215,18 @@ After integration, verify all of these from the product repo:
 ```bash
 scripts/cmsbot styles
 scripts/cmsbot project context marketing/cmsbot/project.json
+scripts/cmsbot calendar plan --project-file marketing/cmsbot/project.json --days 7
+scripts/cmsbot calendar show
 scripts/cmsbot screenshots describe --project-file marketing/cmsbot/project.json
 scripts/cmsbot screenshots validate --project-file marketing/cmsbot/project.json
 scripts/cmsbot topics
 scripts/cmsbot seo research
 scripts/cmsbot seo evaluate
-scripts/cmsbot slideshow specs --blog-file marketing/cmsbot/output/example/index.html
-scripts/cmsbot export-blog-draft marketing/cmsbot/output/example
+scripts/cmsbot slideshow specs --blog-file marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example/source/index.html
+scripts/cmsbot export-blog-draft marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example
+scripts/cmsbot export-thread marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example --project-file marketing/cmsbot/project.json
+scripts/cmsbot export-carousel marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example --project-file marketing/cmsbot/project.json --platform instagram
+scripts/cmsbot export-video-script marketing/cmsbot/output/asset-sets/2026/2026-04/2026-04-18-example --project-file marketing/cmsbot/project.json --platform tiktok
 ```
 
 Then test the local adapters separately, preferably with a fixture-backed test for `blog_draft.json`.

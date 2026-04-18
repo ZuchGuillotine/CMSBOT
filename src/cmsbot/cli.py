@@ -15,6 +15,12 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from cmsbot.analytics import (
+    import_seo_evaluation as import_seo_evaluation_report,
+    load_performance_index,
+    record_social_metrics,
+    render_performance_report,
+)
 from cmsbot.blog_draft import export_blog_draft
 from cmsbot.config import Config
 from cmsbot.content_ops import (
@@ -655,6 +661,167 @@ def topics(
 
 
 @main.group()
+def analytics():
+    """Record and review cross-platform performance keyed to asset sets."""
+    pass
+
+
+@analytics.command("log-social")
+@click.option("--asset-set-id", required=True, help="Asset set id, usually from manifest.json.")
+@click.option("--platform", required=True, help="Platform name such as x, instagram, linkedin, or tiktok.")
+@click.option("--format", "content_format", required=True, help="Format such as thread, carousel, or video_script.")
+@click.option("--slot-id", default=None, help="Optional slot id from content-calendar.json.")
+@click.option("--pillar", default=None, help="Optional pillar label or key.")
+@click.option("--topic", default=None, help="Optional topic for the asset set.")
+@click.option("--hook", default=None, help="Optional hook or opener used in the asset.")
+@click.option("--source-blog", default=None, help="Optional source blog slug or title.")
+@click.option("--posted-date", default=None, help="Publish date in YYYY-MM-DD format.")
+@click.option("--views-24h", type=int, default=0, show_default=True)
+@click.option("--views-48h", type=int, default=0, show_default=True)
+@click.option("--views-7d", type=int, default=0, show_default=True)
+@click.option("--impressions", type=int, default=0, show_default=True)
+@click.option("--saves", type=int, default=0, show_default=True)
+@click.option("--shares", type=int, default=0, show_default=True)
+@click.option("--comments", type=int, default=0, show_default=True)
+@click.option("--profile-visits", type=int, default=0, show_default=True)
+@click.option("--link-clicks", type=int, default=0, show_default=True)
+@click.option("--conversions", type=int, default=0, show_default=True)
+@click.option("--performance-score", type=float, default=None, help="Optional explicit score override.")
+@click.option("--notes", default=None, help="Optional notes about the performance snapshot.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+def analytics_log_social(
+    asset_set_id: str,
+    platform: str,
+    content_format: str,
+    slot_id: str | None,
+    pillar: str | None,
+    topic: str | None,
+    hook: str | None,
+    source_blog: str | None,
+    posted_date: str | None,
+    views_24h: int,
+    views_48h: int,
+    views_7d: int,
+    impressions: int,
+    saves: int,
+    shares: int,
+    comments: int,
+    profile_visits: int,
+    link_clicks: int,
+    conversions: int,
+    performance_score: float | None,
+    notes: str | None,
+    env_file: str | None,
+):
+    """Log social performance against an asset set and optional distribution slot."""
+    config = Config.from_env(env_file)
+    record, destination = record_social_metrics(
+        config.output_dir,
+        asset_set_id=asset_set_id,
+        platform=platform,
+        format=content_format,
+        slot_id=slot_id,
+        pillar=pillar,
+        topic=topic,
+        hook=hook,
+        source_blog=source_blog,
+        posted_date=posted_date,
+        views_24h=views_24h,
+        views_48h=views_48h,
+        views_7d=views_7d,
+        impressions=impressions,
+        saves=saves,
+        shares=shares,
+        comments=comments,
+        profile_visits=profile_visits,
+        link_clicks=link_clicks,
+        conversions=conversions,
+        performance_score=performance_score,
+        notes=notes,
+    )
+    console.print(
+        Panel.fit(
+            f"[bold]Analytics Logged[/bold]\n\n"
+            f"[dim]Asset Set:[/dim] {record['asset_set_id']}\n"
+            f"[dim]Slot:[/dim]      {record.get('slot_id') or 'n/a'}\n"
+            f"[dim]Platform:[/dim]  {record['platform']}\n"
+            f"[dim]Format:[/dim]    {record['format']}\n"
+            f"[dim]Score:[/dim]     {record['performance_score']}\n"
+            f"[dim]Index:[/dim]     {destination}",
+            border_style="green",
+        )
+    )
+
+
+@analytics.command("import-seo-eval")
+@click.option("--file", "report_file", type=click.Path(exists=True, path_type=Path), required=True, help="SEO evaluation report JSON.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+def analytics_import_seo_eval(report_file: Path, env_file: str | None):
+    """Import SEO evaluator output into the shared analytics index."""
+    config = Config.from_env(env_file)
+    try:
+        imported, destination = import_seo_evaluation_report(config.output_dir, report_file)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    console.print(
+        Panel.fit(
+            f"[bold]SEO Analytics Imported[/bold]\n\n"
+            f"[dim]Records:[/dim] {imported}\n"
+            f"[dim]Index:[/dim]   {destination}",
+            border_style="blue",
+        )
+    )
+
+
+@analytics.command("report")
+@click.option("--days", type=int, default=30, show_default=True, help="Lookback window in days.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+def analytics_report(days: int, env_file: str | None):
+    """Show a high-level analytics summary from the shared performance index."""
+    config = Config.from_env(env_file)
+    records = load_performance_index(config.output_dir)
+    if not records:
+        console.print("[dim]No analytics records found yet.[/dim]")
+        return
+
+    report = render_performance_report(records, lookback_days=days)
+    totals = report["totals"]
+    console.print(
+        Panel.fit(
+            f"[bold]Analytics Report[/bold]\n\n"
+            f"[dim]Lookback:[/dim]    {days} days\n"
+            f"[dim]Records:[/dim]     {totals['records']}\n"
+            f"[dim]Views (7d):[/dim]  {totals['views_7d']:,}\n"
+            f"[dim]Impressions:[/dim] {totals['impressions']:,}\n"
+            f"[dim]Saves:[/dim]       {totals['saves']:,}\n"
+            f"[dim]Conversions:[/dim] {totals['conversions']:,}",
+            border_style="magenta",
+        )
+    )
+
+    signals = report["signals"]
+    if signals.get("top_formats"):
+        table = Table(title="Top Formats")
+        table.add_column("Format", style="bold")
+        table.add_column("Avg Score", justify="right")
+        table.add_column("Count", justify="right")
+        for item in signals["top_formats"]:
+            table.add_row(item["key"], f"{item['average_score']:.2f}", str(item["count"]))
+        console.print(table)
+
+    if signals.get("top_pillars"):
+        table = Table(title="Top Pillars")
+        table.add_column("Pillar", style="bold")
+        table.add_column("Avg Score", justify="right")
+        table.add_column("Count", justify="right")
+        for item in signals["top_pillars"]:
+            table.add_row(item["key"], f"{item['average_score']:.2f}", str(item["count"]))
+        console.print(table)
+
+
+@main.group()
 def calendar():
     """Plan and inspect recurring content calendar entries."""
     pass
@@ -691,6 +858,7 @@ def calendar_plan(
 
     chosen_days = days or int(cadence.get("planning_horizon_days", 30) or 30)
     chosen_start = start_date.date() if start_date else date.today()
+    analytics_records = load_performance_index(config.output_dir)
 
     payload = build_content_calendar(
         profile.name,
@@ -699,6 +867,7 @@ def calendar_plan(
         seo=profile.section("seo"),
         start_date=chosen_start,
         days=chosen_days,
+        analytics_records=analytics_records,
     )
 
     if save:
