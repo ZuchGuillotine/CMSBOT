@@ -95,6 +95,74 @@ DEFAULT_PROJECT_PROFILE: dict[str, Any] = {
         "screenshot_refs": [],
         "platforms": ["tiktok", "instagram"],
     },
+    "content_ops": {
+        "pillars": [
+            {
+                "key": "education",
+                "label": "Education",
+                "goals": ["traffic", "awareness"],
+                "default_formats": ["blog", "thread", "carousel"],
+                "topic_seeds": [],
+            },
+            {
+                "key": "product-proof",
+                "label": "Product Proof",
+                "goals": ["consideration", "conversion"],
+                "default_formats": ["blog", "thread", "carousel"],
+                "topic_seeds": [],
+            },
+            {
+                "key": "workflow",
+                "label": "Workflow",
+                "goals": ["activation", "retention"],
+                "default_formats": ["blog", "thread", "video_script"],
+                "topic_seeds": [],
+            },
+        ],
+        "default_formats": ["blog", "thread", "carousel"],
+        "cadence": {
+            "timezone": "America/Los_Angeles",
+            "planning_horizon_days": 30,
+            "default_schedule": [
+                {
+                    "day_offset": 0,
+                    "formats": ["carousel", "thread"],
+                },
+                {
+                    "day_offset": 1,
+                    "formats": ["video_script"],
+                },
+                {
+                    "day_offset": 2,
+                    "formats": ["blog"],
+                },
+            ],
+        },
+        "platforms": {
+            "blog": {"enabled": True},
+            "x": {"enabled": True},
+            "threads": {"enabled": True},
+            "instagram": {"enabled": True},
+            "linkedin": {"enabled": True},
+            "tiktok": {"enabled": True},
+        },
+        "formats": {
+            "carousel": {
+                "templates": [
+                    "fix-your-stack",
+                    "timing-breakdown",
+                    "interaction-map",
+                    "system-blueprint",
+                ],
+            },
+            "thread": {
+                "templates": ["insight-thread", "recap-thread"],
+            },
+            "video_script": {
+                "templates": ["hook-problem-fix", "system-breakdown"],
+            },
+        },
+    },
 }
 
 

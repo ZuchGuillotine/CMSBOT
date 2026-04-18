@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from cmsbot.content_ops import resolve_source_dir
+
 
 def extract_title(html: str) -> str:
     """Extract title from a rendered HTML document."""
@@ -146,7 +148,7 @@ def export_blog_draft(
     thumbnail_url: str | None = None,
 ) -> tuple[dict[str, Any], Path]:
     """Write a portable blog draft artifact to disk."""
-    output_path = Path(output_dir)
+    output_path = resolve_source_dir(output_dir)
     payload = build_blog_draft(
         output_path,
         category=category,

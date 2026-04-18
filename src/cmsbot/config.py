@@ -6,7 +6,11 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - exercised only in minimal environments
+    def load_dotenv(*_args, **_kwargs) -> bool:
+        return False
 
 
 @dataclass

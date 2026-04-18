@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 import click
@@ -16,6 +17,15 @@ from rich.text import Text
 
 from cmsbot.blog_draft import export_blog_draft
 from cmsbot.config import Config
+from cmsbot.content_ops import (
+    build_content_calendar,
+    initialize_generate_layout,
+    load_content_calendar,
+    prepare_generate_layout,
+    write_asset_manifest,
+    write_content_calendar,
+    write_source_brief,
+)
 from cmsbot.context import build_enriched_prompt, list_styles, load_context_file, load_style
 from cmsbot.pipeline import AutoreasonPipeline
 from cmsbot.project import (
@@ -24,6 +34,7 @@ from cmsbot.project import (
     make_project_profile,
     write_project_profile,
 )
+from cmsbot.social_derivatives import export_carousel, export_video_script
 from cmsbot.social_threads import export_social_thread
 from cmsbot.screenshots import (
     copy_screenshot_into_dir,
@@ -116,19 +127,20 @@ def generate(
     """Generate refined content using the Autoreason multi-agent pipeline."""
     # Load config
     config = Config.from_env(env_file)
+    project = None
 
     if budget is not None:
         config.budget_cap = budget
     if max_rounds is not None:
         config.max_rounds = max_rounds
 
-    # Determine output directory
-    if output_dir:
-        out_path = Path(output_dir)
-    else:
-        slug = _slugify(prompt[:60])
-        out_path = config.output_dir / slug
-    config.output_dir = out_path
+    layout = prepare_generate_layout(
+        config.output_dir,
+        prompt,
+        requested_output_dir=Path(output_dir) if output_dir else None,
+    )
+    initialize_generate_layout(layout)
+    config.output_dir = layout.source_dir
 
     # Load context and style, build enriched prompt
     context_text = None
@@ -162,6 +174,17 @@ def generate(
         context=combine_context_text(project_context, context_text),
         style=style_text,
     )
+    write_source_brief(
+        layout,
+        prompt=prompt,
+        task_prompt=task_prompt,
+        content_type=content_type,
+        project_name=project.name if project else None,
+        project_slug=project.slug if project else None,
+        project_file=project_file,
+        context_file=context_file,
+        style=style,
+    )
 
     # Verify at least one provider is configured
     available = config.available_providers()
@@ -186,7 +209,8 @@ def generate(
         f"[dim]Style:[/dim]    {style_label}\n"
         f"[dim]Budget:[/dim]   ${config.budget_cap:.2f}\n"
         f"[dim]Rounds:[/dim]   max {config.max_rounds}\n"
-        f"[dim]Output:[/dim]   {out_path}\n"
+        f"[dim]Asset Set:[/dim] {layout.asset_set_dir}\n"
+        f"[dim]Source:[/dim]   {layout.source_dir}\n"
         f"[dim]Providers:[/dim] {', '.join(available)}",
         border_style="bright_yellow",
     ))
@@ -200,7 +224,7 @@ def generate(
         result = asyncio.run(pipeline.run(
             task_prompt=task_prompt,
             content_type=content_type,
-            output_dir=out_path,
+            output_dir=layout.source_dir,
         ))
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user.[/yellow]")
@@ -209,8 +233,28 @@ def generate(
         console.print(f"\n[red]Error:[/red] {e}")
         sys.exit(1)
 
+    manifest_path = write_asset_manifest(
+        layout,
+        prompt=prompt,
+        task_prompt=task_prompt,
+        content_type=content_type,
+        project_name=project.name if project else None,
+        project_slug=project.slug if project else None,
+        project_file=project_file,
+        context_file=context_file,
+        style=style,
+        pipeline_result=result,
+        budget_summary=pipeline.budget.summary(),
+    )
+
     # Show results
-    _print_results(result, pipeline.budget, out_path)
+    _print_results(
+        result,
+        pipeline.budget,
+        asset_set_dir=layout.asset_set_dir,
+        source_dir=layout.source_dir,
+        manifest_path=manifest_path,
+    )
 
 
 @main.command("export-blog-draft")
@@ -338,6 +382,140 @@ def export_thread_command(
             f"[dim]JSON:[/dim] {json_path}\n"
             f"[dim]Markdown:[/dim] {md_path}",
             border_style="magenta",
+        )
+    )
+
+
+@main.command("export-carousel")
+@click.argument("output_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--project-file", type=click.Path(exists=True), required=True, help="CMSBOT project profile JSON.")
+@click.option("--context-file", type=click.Path(exists=True), default=None, help="Optional extra brand/context document.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+@click.option("--section", type=int, default=None, help="1-based section index to repurpose.")
+@click.option("--section-title", default=None, help="Exact section heading to repurpose.")
+@click.option("--provider", default=None, help="Optional provider override for carousel generation.")
+@click.option(
+    "--platform",
+    type=click.Choice(["instagram", "linkedin"]),
+    default="instagram",
+    show_default=True,
+    help="Target platform for the carousel package.",
+)
+@click.option(
+    "--save-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional explicit output directory. Defaults to distribution/<platform> for asset sets.",
+)
+def export_carousel_command(
+    output_dir: Path,
+    project_file: str,
+    context_file: str | None,
+    env_file: str | None,
+    section: int | None,
+    section_title: str | None,
+    provider: str | None,
+    platform: str,
+    save_dir: Path | None,
+):
+    """Export a creator-ready carousel package from a generated CMSBOT blog post."""
+    try:
+        payload, json_path, md_path, caption_path = export_carousel(
+            output_dir,
+            project_file=project_file,
+            context_file=context_file,
+            env_file=env_file,
+            section=section,
+            section_title=section_title,
+            provider_name=provider,
+            platform=platform,
+            save_dir=save_dir,
+        )
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    console.print(
+        Panel.fit(
+            f"[bold]Carousel Exported[/bold]\n\n"
+            f"[dim]Project:[/dim] {payload['project']}\n"
+            f"[dim]Platform:[/dim] {payload['platform']}\n"
+            f"[dim]Section:[/dim] {payload['source']['section_title']}\n"
+            f"[dim]Slides:[/dim] {len(payload['slides'])}\n"
+            f"[dim]JSON:[/dim] {json_path}\n"
+            f"[dim]Markdown:[/dim] {md_path}\n"
+            f"[dim]Caption:[/dim] {caption_path}",
+            border_style="cyan",
+        )
+    )
+
+
+@main.command("export-video-script")
+@click.argument("output_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--project-file", type=click.Path(exists=True), required=True, help="CMSBOT project profile JSON.")
+@click.option("--context-file", type=click.Path(exists=True), default=None, help="Optional extra brand/context document.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+@click.option("--section", type=int, default=None, help="1-based section index to repurpose.")
+@click.option("--section-title", default=None, help="Exact section heading to repurpose.")
+@click.option("--provider", default=None, help="Optional provider override for video-script generation.")
+@click.option(
+    "--platform",
+    type=click.Choice(["tiktok", "instagram", "youtube_shorts"]),
+    default="tiktok",
+    show_default=True,
+    help="Target platform for the short-form video package.",
+)
+@click.option(
+    "--save-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional explicit output directory. Defaults to distribution/<platform> for asset sets.",
+)
+def export_video_script_command(
+    output_dir: Path,
+    project_file: str,
+    context_file: str | None,
+    env_file: str | None,
+    section: int | None,
+    section_title: str | None,
+    provider: str | None,
+    platform: str,
+    save_dir: Path | None,
+):
+    """Export a creator-ready short-form video script package from generated CMSBOT content."""
+    try:
+        payload, json_path, script_path, storyboard_path = export_video_script(
+            output_dir,
+            project_file=project_file,
+            context_file=context_file,
+            env_file=env_file,
+            section=section,
+            section_title=section_title,
+            provider_name=provider,
+            platform=platform,
+            save_dir=save_dir,
+        )
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    console.print(
+        Panel.fit(
+            f"[bold]Video Script Exported[/bold]\n\n"
+            f"[dim]Project:[/dim] {payload['project']}\n"
+            f"[dim]Platform:[/dim] {payload['platform']}\n"
+            f"[dim]Section:[/dim] {payload['source']['section_title']}\n"
+            f"[dim]Beats:[/dim] {len(payload['beats'])}\n"
+            f"[dim]JSON:[/dim] {json_path}\n"
+            f"[dim]Script:[/dim] {script_path}\n"
+            f"[dim]Storyboard:[/dim] {storyboard_path}",
+            border_style="bright_magenta",
         )
     )
 
@@ -474,6 +652,112 @@ def topics(
         console.print()
 
     console.print(f"[dim]Loaded {len(merged)} topic briefs from {chosen_file}.[/dim]")
+
+
+@main.group()
+def calendar():
+    """Plan and inspect recurring content calendar entries."""
+    pass
+
+
+@calendar.command("plan")
+@click.option("--project-file", type=click.Path(exists=True), required=True, help="CMSBOT project profile JSON.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+@click.option("--days", type=int, default=None, help="Planning horizon in days.")
+@click.option(
+    "--start-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    default=None,
+    help="Calendar start date in YYYY-MM-DD format. Defaults to today.",
+)
+@click.option(
+    "--save",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Optional explicit output path. Defaults to <CMSBOT_OUTPUT_DIR>/calendar/content-calendar.json.",
+)
+def calendar_plan(
+    project_file: str,
+    env_file: str | None,
+    days: int | None,
+    start_date: datetime | None,
+    save: Path | None,
+):
+    """Generate a calendar file from the project's content_ops configuration."""
+    config = Config.from_env(env_file)
+    profile = load_project_profile(project_file)
+    content_ops = profile.section("content_ops")
+    cadence = content_ops.get("cadence", {}) if isinstance(content_ops.get("cadence"), dict) else {}
+
+    chosen_days = days or int(cadence.get("planning_horizon_days", 30) or 30)
+    chosen_start = start_date.date() if start_date else date.today()
+
+    payload = build_content_calendar(
+        profile.name,
+        profile.slug,
+        content_ops=content_ops,
+        seo=profile.section("seo"),
+        start_date=chosen_start,
+        days=chosen_days,
+    )
+
+    if save:
+        save.parent.mkdir(parents=True, exist_ok=True)
+        save.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        destination = save
+    else:
+        destination = write_content_calendar(config.output_dir, payload)
+
+    console.print(
+        Panel.fit(
+            f"[bold]Content Calendar Planned[/bold]\n\n"
+            f"[dim]Project:[/dim] {profile.name}\n"
+            f"[dim]Start:[/dim]   {payload['start_date']}\n"
+            f"[dim]Days:[/dim]    {payload['days']}\n"
+            f"[dim]Entries:[/dim] {len(payload['entries'])}\n"
+            f"[dim]Output:[/dim]  {destination}",
+            border_style="blue",
+        )
+    )
+
+
+@calendar.command("show")
+@click.option("--file", "calendar_file", type=click.Path(exists=True, path_type=Path), default=None, help="Calendar JSON file.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+@click.option("--limit", type=int, default=12, show_default=True, help="Maximum entries to show.")
+def calendar_show(calendar_file: Path | None, env_file: str | None, limit: int):
+    """Show planned content entries from a generated calendar file."""
+    config = Config.from_env(env_file)
+    chosen_file = calendar_file or (config.output_dir / "calendar" / "content-calendar.json")
+    if not chosen_file.exists():
+        console.print(f"[red]Error:[/red] No calendar found at {chosen_file}")
+        sys.exit(1)
+
+    payload = load_content_calendar(chosen_file)
+    entries = payload.get("entries", [])
+    if not entries:
+        console.print(f"[dim]No entries found in {chosen_file}.[/dim]")
+        return
+
+    table = Table(title=f"Content Calendar ({chosen_file})")
+    table.add_column("Date", style="bold")
+    table.add_column("Pillar")
+    table.add_column("Topic")
+    table.add_column("Assets")
+    table.add_column("Slots", justify="right")
+
+    for entry in entries[:limit]:
+        assets = ", ".join(entry.get("asset_set", []))
+        table.add_row(
+            str(entry.get("date", "")),
+            str(entry.get("pillar_label") or entry.get("pillar") or ""),
+            str(entry.get("topic") or ""),
+            assets,
+            str(len(entry.get("distribution_slots", []))),
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]Showing {min(limit, len(entries))} of {len(entries)} entries.[/dim]")
 
 
 @main.group()
@@ -721,7 +1005,14 @@ def models():
     console.print(table)
 
 
-def _print_results(result, budget, output_dir: Path):
+def _print_results(
+    result,
+    budget,
+    *,
+    asset_set_dir: Path,
+    source_dir: Path,
+    manifest_path: Path | None = None,
+):
     """Print a summary of the pipeline results."""
     console.print()
 
@@ -762,19 +1053,11 @@ def _print_results(result, budget, output_dir: Path):
 
         console.print(rounds_table)
 
-    console.print(f"\n[green bold]Output saved to:[/green bold] {output_dir}/index.html")
+    console.print(f"\n[green bold]Source HTML:[/green bold] {source_dir / 'index.html'}")
+    if manifest_path is not None:
+        console.print(f"[green bold]Manifest:[/green bold] {manifest_path}")
+    if asset_set_dir != source_dir:
+        console.print(f"[green bold]Asset Set:[/green bold] {asset_set_dir}")
     console.print()
-
-
-def _slugify(text: str) -> str:
-    """Convert text to a URL-friendly slug."""
-    import re
-    text = text.lower().strip()
-    text = re.sub(r'[^\w\s-]', '', text)
-    text = re.sub(r'[\s_]+', '-', text)
-    text = re.sub(r'-+', '-', text)
-    return text[:60].strip('-') or "content"
-
-
 if __name__ == "__main__":
     main()
