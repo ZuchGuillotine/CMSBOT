@@ -1,4 +1,4 @@
-"""OpenAI provider (GPT + DALL-E) and OpenAI-compatible provider for Qwen etc."""
+"""OpenAI provider (GPT + GPT Image) and OpenAI-compatible provider for Qwen etc."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 import openai
 
-from cmsbot.budget import DALLE_COSTS, compute_cost
+from cmsbot.budget import GPT_IMAGE_COSTS, compute_cost
 from cmsbot.models import LLMResponse
 from cmsbot.providers.base import LLMProvider
 
@@ -65,13 +65,15 @@ class OpenAIProvider(LLMProvider):
         size: str = "1024x1024",
         placement: str = "section",
     ) -> float:
-        """Generate an image with DALL-E 3, post-process, and save as JPEG. Returns cost."""
+        """Generate an image with GPT Image, post-process, and save as JPEG. Returns cost."""
         from cmsbot.postprocess import postprocess_blog_image
 
+        quality = "high" if placement == "hero" else "medium"
         response = await self._client.images.generate(
-            model="dall-e-3",
+            model="gpt-image-1",
             prompt=prompt,
             size=size,
+            quality=quality,
             n=1,
             response_format="b64_json",
         )
@@ -79,7 +81,6 @@ class OpenAIProvider(LLMProvider):
         image_data = base64.b64decode(response.data[0].b64_json)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Save raw PNG temporarily, then post-process to JPEG
         raw_path = output_path.with_name(output_path.stem + ".raw.png")
         try:
             raw_path.write_bytes(image_data)
@@ -88,7 +89,7 @@ class OpenAIProvider(LLMProvider):
         finally:
             raw_path.unlink(missing_ok=True)
 
-        return DALLE_COSTS.get(size, 0.04)
+        return GPT_IMAGE_COSTS.get(size, 0.042)
 
 
 class OpenAICompatProvider(LLMProvider):

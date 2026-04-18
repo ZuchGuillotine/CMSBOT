@@ -1,4 +1,4 @@
-"""Blog image post-processing — transforms raw DALL-E output into natural-looking photos.
+"""Blog image post-processing — transforms AI-generated output into natural-looking photos.
 
 Adapts techniques from the slideshow pipeline (tools/slideshow-pipeline/postprocess.py)
 with parameters tuned for editorial blog photography rather than TikTok/Instagram social.
@@ -6,12 +6,14 @@ with parameters tuned for editorial blog photography rather than TikTok/Instagra
 Transform chain:
     1. Resize to blog dimensions (hero: 1500px, section: 1000px wide)
     2. Color grade (lift blacks, warm midtones, gentle highlight rolloff)
-    3. Film grain (2.5% gaussian noise)
-    4. Vignette (8% corner darkening)
-    5. Chromatic aberration (1.2px subtle lens fringing)
-    6. Micro-rotation (0.3-0.5 degrees)
-    7. Metadata strip (clean EXIF)
-    8. JPEG compression (quality 87)
+    3. Highlight desaturation (mimics real sensor clipping behavior)
+    4. Lens softness (subtle micro-blur to break pixel-perfect AI sharpness)
+    5. Film grain with channel asymmetry (heavier in blue/red like real sensors)
+    6. Vignette (8% corner darkening)
+    7. Chromatic aberration (1.2px subtle lens fringing)
+    8. Micro-rotation (0.3-0.5 degrees)
+    9. Metadata strip (clean EXIF)
+    10. JPEG compression (quality 87)
 """
 
 from __future__ import annotations
@@ -40,6 +42,11 @@ CHROMATIC_ABERRATION_PX = 1.2  # max pixel shift for CA simulation
 COLOR_WARM_R = 3  # midtone red shift
 COLOR_WARM_G = 1  # midtone green shift
 HIGHLIGHT_THRESHOLD = 230  # start rolloff above this
+HIGHLIGHT_DESAT_THRESHOLD = 0.90  # luminance fraction above which to desaturate
+HIGHLIGHT_DESAT_STRENGTH = 0.35  # how much to desaturate highlights
+LENS_SOFTNESS_RADIUS = 0.4  # gaussian blur radius in pixels
+GRAIN_BLUE_WEIGHT = 1.3  # blue channel gets more noise (like real CMOS sensors)
+GRAIN_RED_WEIGHT = 1.1  # red channel gets slightly more noise
 
 
 # ---------------------------------------------------------------------------
@@ -80,11 +87,35 @@ def apply_color_grade(img: Image.Image) -> Image.Image:
     return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
 
 
+def desaturate_highlights(
+    img: Image.Image,
+    threshold: float = HIGHLIGHT_DESAT_THRESHOLD,
+    strength: float = HIGHLIGHT_DESAT_STRENGTH,
+) -> Image.Image:
+    """Desaturate bright highlights — real sensors lose color as they approach clipping."""
+    arr = np.array(img, dtype=np.float32)
+    luminance = (0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]) / 255.0
+    mask = np.clip((luminance - threshold) / (1.0 - threshold), 0, 1) * strength
+    mask = mask[:, :, np.newaxis]
+    gray = luminance[:, :, np.newaxis] * 255.0
+    arr = arr * (1.0 - mask) + gray * mask
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+
+
+def add_lens_softness(img: Image.Image, radius: float = LENS_SOFTNESS_RADIUS) -> Image.Image:
+    """Subtle gaussian blur to break pixel-perfect AI sharpness."""
+    from PIL import ImageFilter
+
+    return img.filter(ImageFilter.GaussianBlur(radius=radius))
+
+
 def add_film_grain(img: Image.Image, intensity: float = FILM_GRAIN_INTENSITY) -> Image.Image:
-    """Add gaussian noise simulating camera sensor grain."""
+    """Add gaussian noise with per-channel asymmetry simulating real CMOS sensor behavior."""
     arr = np.array(img, dtype=np.float32)
     noise_strength = (intensity / 100.0) * 255
+    channel_weights = np.array([GRAIN_RED_WEIGHT, 1.0, GRAIN_BLUE_WEIGHT], dtype=np.float32)
     noise = np.random.normal(0, noise_strength, arr.shape).astype(np.float32)
+    noise *= channel_weights[np.newaxis, np.newaxis, :]
     return Image.fromarray(np.clip(arr + noise, 0, 255).astype(np.uint8))
 
 
@@ -186,7 +217,7 @@ def postprocess_blog_image(
     """Full post-processing pipeline for a single blog image.
 
     Args:
-        raw_path: Path to raw DALL-E PNG.
+        raw_path: Path to raw provider PNG.
         output_path: Path for the final JPEG output.
         placement: "hero" or "section-N" — determines target dimensions.
 
@@ -208,30 +239,38 @@ def postprocess_blog_image(
         img = apply_color_grade(img)
         steps.append("color graded")
 
-        # 3. Film grain
+        # 3. Highlight desaturation
+        img = desaturate_highlights(img)
+        steps.append("highlight desat")
+
+        # 4. Lens softness
+        img = add_lens_softness(img)
+        steps.append(f"lens softness {LENS_SOFTNESS_RADIUS}px")
+
+        # 5. Film grain (channel-asymmetric)
         img = add_film_grain(img)
         steps.append(f"grain {FILM_GRAIN_INTENSITY}%")
 
-        # 4. Vignette
+        # 6. Vignette
         img = add_vignette(img)
         steps.append(f"vignette {int(VIGNETTE_INTENSITY * 100)}%")
 
-        # 5. Chromatic aberration
+        # 7. Chromatic aberration
         try:
             img = add_chromatic_aberration(img)
             steps.append(f"CA {CHROMATIC_ABERRATION_PX}px")
         except ImportError:
             pass  # scipy not installed — skip CA
 
-        # 6. Micro-rotation
+        # 8. Micro-rotation
         img = micro_rotate(img)
         steps.append("micro-rotated")
 
-        # 7. Strip metadata
+        # 9. Strip metadata
         img = strip_metadata(img)
         steps.append("metadata stripped")
 
-        # 8. JPEG compression
+        # 10. JPEG compression
         img = compress_jpeg(img)
         steps.append(f"JPEG q={JPEG_QUALITY}")
 
@@ -276,6 +315,12 @@ def postprocess_blog_image_bytes(
 
         img = apply_color_grade(img)
         steps.append("color graded")
+
+        img = desaturate_highlights(img)
+        steps.append("highlight desat")
+
+        img = add_lens_softness(img)
+        steps.append(f"lens softness {LENS_SOFTNESS_RADIUS}px")
 
         img = add_film_grain(img)
         steps.append(f"grain {FILM_GRAIN_INTENSITY}%")

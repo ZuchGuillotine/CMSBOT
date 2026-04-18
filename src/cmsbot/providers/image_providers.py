@@ -1,4 +1,4 @@
-"""Image generation providers — Grok Imagine, Nano Banana (Gemini), Unsplash, and DALL-E.
+"""Image generation providers — Grok Imagine, Nano Banana (Gemini), Unsplash, and GPT Image.
 
 Each provider implements the same interface: given a prompt and size,
 return raw image bytes.  The ImageDirector generates candidates from
@@ -115,22 +115,30 @@ class NanobananProvider(ImageProvider):
     ) -> ImageResult:
         from google.genai import types as genai_types
 
-        # Parse target dimensions from size string for the prompt
         w, h = (int(x) for x in size.split("x"))
         orientation = "landscape" if w > h else "portrait" if h > w else "square"
+        aspect_ratios = {"landscape": "16:9", "portrait": "9:16", "square": "1:1"}
+        image_size = "2K" if max(w, h) > 1024 else "1K"
 
         full_prompt = (
             f"{prompt}\n\n"
             f"Image orientation: {orientation} ({w}x{h} pixels). "
-            "Photorealistic style. No text, watermarks, or logos in the image."
+            "Photorealistic, cinematic realism, shot on DSLR, natural light. "
+            "No text, watermarks, or logos in the image."
         )
+
+        config_params = {
+            "response_modalities": ["IMAGE"],
+            "image_generation_config": genai_types.ImageGenerationConfig(
+                aspect_ratio=aspect_ratios.get(orientation, "16:9"),
+                image_size=image_size,
+            ),
+        }
 
         response = await self._client.aio.models.generate_content(
             model=self.model,
             contents=full_prompt,
-            config=genai_types.GenerateContentConfig(
-                response_modalities=["IMAGE"],
-            ),
+            config=genai_types.GenerateContentConfig(**config_params),
         )
 
         # Extract image bytes from response parts
@@ -223,25 +231,32 @@ class UnsplashProvider(ImageProvider):
 
 
 # ---------------------------------------------------------------------------
-# DALL-E (existing, wrapped in new interface for uniformity)
+# GPT Image (replaces deprecated DALL-E 3)
 # ---------------------------------------------------------------------------
 
-DALLE_IMAGE_COSTS = {
-    "1024x1024": 0.040,
-    "1024x1792": 0.080,
-    "1792x1024": 0.080,
+GPT_IMAGE_COSTS = {
+    ("1024x1024", "low"): 0.011,
+    ("1024x1024", "medium"): 0.042,
+    ("1024x1024", "high"): 0.167,
+    ("1024x1536", "low"): 0.016,
+    ("1024x1536", "medium"): 0.063,
+    ("1024x1536", "high"): 0.250,
+    ("1536x1024", "low"): 0.016,
+    ("1536x1024", "medium"): 0.063,
+    ("1536x1024", "high"): 0.250,
 }
 
 
-class DalleImageProvider(ImageProvider):
-    """OpenAI DALL-E 3 — wrapped in the ImageProvider interface as fallback."""
+class GPTImageProvider(ImageProvider):
+    """OpenAI GPT Image generation — natively multimodal, replaces deprecated DALL-E."""
 
-    name = "dalle"
+    name = "gpt_image"
 
-    def __init__(self, api_key: str, model: str = "dall-e-3"):
+    def __init__(self, api_key: str, model: str = "gpt-image-1", quality: str = "medium"):
         import openai
 
         self.model = model
+        self.quality = quality
         self._client = openai.AsyncOpenAI(api_key=api_key)
 
     async def generate(
@@ -253,6 +268,7 @@ class DalleImageProvider(ImageProvider):
             model=self.model,
             prompt=prompt,
             size=size,
+            quality=self.quality,
             n=1,
             response_format="b64_json",
         )
@@ -261,5 +277,5 @@ class DalleImageProvider(ImageProvider):
             image_bytes=image_bytes,
             provider=self.name,
             model=self.model,
-            cost=DALLE_IMAGE_COSTS.get(size, 0.04),
+            cost=GPT_IMAGE_COSTS.get((size, self.quality), 0.042),
         )

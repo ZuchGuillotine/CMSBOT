@@ -47,52 +47,74 @@ Hard rules:
 """
 
 BLOG_HERO_CAMERA_SUFFIX = (
-    " Shot on a mirrorless camera (Sony A7 IV, 35mm f/1.8 lens). Editorial photography"
-    " style. Natural window light, slightly warm color temperature. Slight lift in"
-    " shadows, gentle highlight rolloff, warm midtones. Shallow depth of field with"
-    " soft background blur. Clean composition, professional but not sterile. The image"
-    " should feel like it belongs in a well-designed online magazine."
+    " Shot on a Sony A7 IV with a 35mm f/1.8 lens on Kodak Portra 400 film stock."
+    " Editorial photography for a well-designed online magazine. Natural window light,"
+    " slightly warm color temperature with gentle Rembrandt falloff. Lifted shadows,"
+    " gentle highlight rolloff with slight desaturation in the highlights, warm midtones."
+    " Shallow depth of field with soft bokeh. Candid, honest framing — not perfectly"
+    " centered. Muted, natural color palette. The scene should feel captured, not assembled."
 )
 
 BLOG_SECTION_CAMERA_SUFFIX = (
-    " Shot on a mirrorless camera or high-end phone camera. Mix of editorial and"
-    " product photography. Natural lighting, slightly warm tones. Lifted shadows,"
-    " gentle highlights, warm midtones. Clean background, professional but"
-    " approachable. Authentic feel with slight imperfections."
+    " Shot on a Canon EOS R5 or high-end phone camera, color palette reminiscent of"
+    " Fujifilm Superia. Mix of editorial and product photography. Natural lighting with"
+    " slight warm cast and mixed color temperatures. Lifted shadows, gentle highlights,"
+    " warm midtones. Muted, natural tones — not oversaturated. Clean background,"
+    " professional but approachable. Authentic feel with slight imperfections and"
+    " natural texture detail."
 )
 
 PHOTO_NEGATIVE_SUFFIX = (
     " No stock photo poses, no stock photo cliches, no perfect symmetry, no text, no"
     " numbers, no labels, no charts, no dashboards, no screenshots, no whiteboards,"
     " no posters, no packaging fronts, no documents, no signage, no tables, no UI"
-    " chrome, no watermarks, no logos."
+    " chrome, no watermarks, no logos. No plastic skin, no airbrushed look, no poreless"
+    " faces, no waxy skin, no mannequin-like features, no oversaturation, no hyper-clean"
+    " CGI sharpness, no 3D render aesthetic, no extra fingers or deformed hands."
 )
 
 ANTI_AI_REALISM_VARIANTS = (
     (
-        " Subtle sensor grain, faint chromatic aberration on a few high-contrast edges,"
-        " and slightly imperfect clarity like a lightly upscaled 720p editorial web"
-        " photo. Keep it natural, not degraded."
+        " Subtle sensor grain like Kodak Portra 400 pushed one stop, faint chromatic"
+        " aberration on a few high-contrast edges, and slightly imperfect clarity like a"
+        " lightly upscaled 720p editorial web photo. Natural film halation around bright"
+        " highlights. Keep it natural, not degraded."
     ),
     (
-        " Preserve visible skin texture and pores when people are present, a few stray"
-        " hairs or flyaways, natural fabric wrinkles, and small facial asymmetries."
-        " Nothing airbrushed or overly polished."
+        " Preserve visible skin texture and pores when people are present — real pores,"
+        " freckles, sun damage, laugh lines. A few stray hairs or flyaways, natural fabric"
+        " wrinkles, and small facial asymmetries. Weathered, honest, authentic. Nothing"
+        " airbrushed, glamorized, or overly polished."
     ),
     (
         " Add minor handheld realism: tiny focus falloff, slightly imperfect framing,"
-        " candid timing, and micro-variations in posture or object placement. Avoid"
-        " posed stock-photo stiffness."
+        " candid timing caught mid-stride, and micro-variations in posture or object"
+        " placement. Natural contact shadows, realistic reflections in surfaces. Avoid"
+        " posed stock-photo stiffness — the scene should feel captured, not staged."
     ),
     (
         " Keep real-world surface imperfections where plausible: faint dust, tiny"
-        " scuffs, mild reflection irregularities, lived-in surfaces, and subtle edge"
-        " softness rather than hyper-clean CGI sharpness."
+        " scuffs, mild reflection irregularities, lived-in surfaces, worn materials,"
+        " and subtle edge softness rather than hyper-clean CGI sharpness. Muted, natural"
+        " color palette — not oversaturated or HDR."
     ),
     (
-        " Let the scene retain small capture flaws: gentle grain in the midtones,"
-        " minimal lens softness, slight exposure inconsistency, and realistic material"
-        " texture in skin, hair, wood, fabric, or metal."
+        " Let the scene retain small capture flaws: gentle grain in the midtones like"
+        " Fujifilm Superia, minimal lens softness, slight exposure inconsistency, and"
+        " realistic material texture in skin, hair, wood, fabric, or metal. Slight"
+        " highlight desaturation as values approach clipping, like real sensor behavior."
+    ),
+    (
+        " Color palette reminiscent of Ilford HP5 cross-processed — muted tones, natural"
+        " white balance with a slight warm cast, not perfectly neutral. Visible fabric"
+        " weave, wood grain, surface imperfections. Everything should have unique"
+        " environmental details with natural variation, never repeated patterns."
+    ),
+    (
+        " Authentic mixed lighting: window light combined with overhead fixtures at"
+        " slightly different color temperatures. Natural depth of field with foreground"
+        " or background softly out of focus. Slight film halation around specular"
+        " highlights. The image should feel grounded and real, not assembled from concepts."
     ),
 )
 
@@ -401,7 +423,7 @@ def _parse_image_specs(text: str) -> list[ImageSpec]:
                         if method not in {"fetch", "generate", "diagram"}:
                             method = "generate"
                         spec = ImageSpec(
-                            description=item.get("description", item.get("gen_prompt", item.get("dalle_prompt", ""))),
+                            description=item.get("description", item.get("gen_prompt", "")),
                             alt_text=item.get("alt_text", ""),
                             placement=item.get("placement", f"section-{len(specs) + 1}"),
                             method=method,

@@ -27,11 +27,12 @@ MODEL_COSTS: dict[str, dict[str, float]] = {
 # Fallback cost if model not in table
 FALLBACK_COST = {"input": 3.00, "output": 15.00}
 
-# Image generation pricing per image
-DALLE_COSTS = {
-    "1024x1024": 0.040,
-    "1024x1792": 0.080,
-    "1792x1024": 0.080,
+# Image generation pricing per image (GPT Image medium quality)
+GPT_IMAGE_COSTS = {
+    "1024x1024": 0.042,
+    "1024x1536": 0.063,
+    "1536x1024": 0.063,
+    "1792x1024": 0.063,
 }
 
 GROK_IMAGE_COSTS = {
@@ -103,7 +104,7 @@ class BudgetTracker:
         return entry
 
     def record_image(self, size: str = "1024x1024") -> float:
-        cost = DALLE_COSTS.get(size, 0.04)
+        cost = GPT_IMAGE_COSTS.get(size, 0.042)
         self.image_cost += cost
         return cost
 

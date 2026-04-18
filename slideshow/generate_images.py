@@ -30,7 +30,7 @@ if str(SRC_DIR) not in sys.path:
 from cmsbot.screenshots import load_manifest, resolve_screenshot_ref
 from cmsbot.config import Config
 from cmsbot.providers.image_providers import (
-    DalleImageProvider,
+    GPTImageProvider,
     GrokImageProvider,
     ImageProvider,
     NanobananProvider,
@@ -276,7 +276,7 @@ def build_raster_image_providers() -> list[ImageProvider]:
         )
 
     if len(providers) < 2 and config.openai:
-        providers.append(DalleImageProvider(api_key=config.openai.api_key))
+        providers.append(GPTImageProvider(api_key=config.openai.api_key, quality="high"))
 
     return providers
 

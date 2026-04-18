@@ -17,7 +17,7 @@ from cmsbot.config import Config
 from cmsbot.models import ContentType, Draft, PipelineResult, RoundResult
 from cmsbot.providers import build_provider
 from cmsbot.providers.image_providers import (
-    DalleImageProvider,
+    GPTImageProvider,
     GrokImageProvider,
     ImageProvider,
     NanobananProvider,
@@ -66,7 +66,7 @@ class AutoreasonPipeline:
             judge_providers.append(build_provider(name, self.config))
         self.judge_panel = JudgePanel(judge_providers)
 
-        # Image providers — build all available, fall back to DALL-E only
+        # Image providers — build all available, GPT Image as fallback
         director_provider = build_provider(roles.image_director, self.config)
         raster_image_providers: list[ImageProvider] = []
         fetch_provider: ImageProvider | None = None
@@ -84,10 +84,13 @@ class AutoreasonPipeline:
         if self.config.unsplash_key:
             fetch_provider = UnsplashProvider(access_key=self.config.unsplash_key)
 
-        # DALL-E as fallback if fewer than 2 providers available
+        # GPT Image as fallback if fewer than 2 providers available
         if len(raster_image_providers) < 2 and self.config.openai:
             raster_image_providers.append(
-                DalleImageProvider(api_key=self.config.openai.api_key)
+                GPTImageProvider(
+                    api_key=self.config.openai.api_key,
+                    quality="high",
+                )
             )
 
         if not raster_image_providers and fetch_provider is None:
