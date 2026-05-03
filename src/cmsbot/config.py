@@ -51,6 +51,7 @@ class Config:
     # Optional / image providers
     unsplash_key: str | None = None
     xai_key: str | None = None
+    openai_image_model: str = "gpt-image-2"
 
     @classmethod
     def from_env(cls, env_path: str | Path | None = None) -> Config:
@@ -100,6 +101,7 @@ class Config:
         output_dir = Path(os.getenv("CMSBOT_OUTPUT_DIR", "output"))
         unsplash_key = os.getenv("UNSPLASH_ACCESS_KEY")
         xai_key = os.getenv("XAI_API_KEY")
+        openai_image_model = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
 
         return cls(
             anthropic=anthropic,
@@ -112,6 +114,7 @@ class Config:
             output_dir=output_dir,
             unsplash_key=unsplash_key,
             xai_key=xai_key,
+            openai_image_model=openai_image_model,
         )
 
     def get_provider_config(self, name: str) -> ProviderConfig:

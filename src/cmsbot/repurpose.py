@@ -29,7 +29,7 @@ def pick_provider_name(config: Config) -> str:
     preferred = config.roles.author
     if preferred in available and preferred != "openai_compat":
         return preferred
-    for candidate in ("anthropic", "openai", "gemini", "anthropic_opus", "openai_compat"):
+    for candidate in ("openai", "anthropic", "gemini", "anthropic_opus", "openai_compat"):
         if candidate in available:
             return candidate
     return available[0]

@@ -252,7 +252,7 @@ class GPTImageProvider(ImageProvider):
 
     name = "gpt_image"
 
-    def __init__(self, api_key: str, model: str = "gpt-image-1", quality: str = "medium"):
+    def __init__(self, api_key: str, model: str = "gpt-image-2", quality: str = "medium"):
         import openai
 
         self.model = model

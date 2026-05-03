@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import os
 from pathlib import Path
 
 import openai
@@ -69,7 +70,7 @@ class OpenAIProvider(LLMProvider):
 
         quality = "high" if placement == "hero" else "medium"
         response = await self._client.images.generate(
-            model="gpt-image-1",
+            model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2"),
             prompt=prompt,
             size=size,
             quality=quality,

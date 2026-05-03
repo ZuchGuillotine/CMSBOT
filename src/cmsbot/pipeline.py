@@ -65,32 +65,13 @@ class AutoreasonPipeline:
             judge_providers.append(build_provider(name, self.config))
         self.judge_panel = JudgePanel(judge_providers)
 
-        # Image providers — build all available, GPT Image as fallback
+        # Image providers — candidate order reflects current quality preference.
         director_provider = build_provider(roles.image_director, self.config)
-        raster_image_providers: list[ImageProvider] = []
+        raster_image_providers = self._build_raster_image_providers()
         fetch_provider: ImageProvider | None = None
-
-        if self.config.xai_key:
-            raster_image_providers.append(
-                GrokImageProvider(api_key=self.config.xai_key)
-            )
-
-        if self.config.gemini:
-            raster_image_providers.append(
-                NanobananProvider(api_key=self.config.gemini.api_key)
-            )
 
         if self.config.unsplash_key:
             fetch_provider = UnsplashProvider(access_key=self.config.unsplash_key)
-
-        # GPT Image as fallback if fewer than 2 providers available
-        if len(raster_image_providers) < 2 and self.config.openai:
-            raster_image_providers.append(
-                GPTImageProvider(
-                    api_key=self.config.openai.api_key,
-                    quality="high",
-                )
-            )
 
         if not raster_image_providers and fetch_provider is None:
             raise ValueError(
@@ -109,11 +90,8 @@ class AutoreasonPipeline:
             judge_provider = director_provider
         image_judge = ImageJudge(judge_provider)
 
-        svg_provider = build_provider("openai", self.config) if self.config.openai else None
-        svg_fallback_provider = build_provider("anthropic", self.config) if self.config.anthropic else None
-        if svg_provider is None and svg_fallback_provider is not None:
-            svg_provider = svg_fallback_provider
-            svg_fallback_provider = None
+        svg_provider = build_provider("anthropic", self.config) if self.config.anthropic else None
+        svg_fallback_provider = build_provider("openai", self.config) if self.config.openai else None
 
         self.image_director = ImageDirector(
             director_provider=director_provider,
@@ -126,6 +104,26 @@ class AutoreasonPipeline:
         )
 
         self.renderer = Renderer()
+
+    def _build_raster_image_providers(self) -> list[ImageProvider]:
+        providers: list[ImageProvider] = []
+
+        if self.config.xai_key:
+            providers.append(GrokImageProvider(api_key=self.config.xai_key))
+
+        if self.config.openai:
+            providers.append(
+                GPTImageProvider(
+                    api_key=self.config.openai.api_key,
+                    model=self.config.openai_image_model,
+                    quality="high",
+                )
+            )
+
+        if self.config.gemini:
+            providers.append(NanobananProvider(api_key=self.config.gemini.api_key))
+
+        return providers
 
     async def run(
         self,
