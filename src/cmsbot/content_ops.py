@@ -117,6 +117,7 @@ def write_source_brief(
     project_file: str | None,
     context_file: str | None,
     style: str | None,
+    execution_mode: str = "autoreason",
 ) -> dict[str, Path]:
     prompt_path = layout.source_dir / "prompt.md"
     prompt_path.write_text(task_prompt.strip() + "\n", encoding="utf-8")
@@ -134,6 +135,7 @@ def write_source_brief(
         },
         "context_file": context_file,
         "style": style,
+        "execution_mode": execution_mode,
     }
     brief_path.write_text(json.dumps(brief_payload, indent=2) + "\n", encoding="utf-8")
     return {"prompt": prompt_path, "brief": brief_path}
@@ -152,6 +154,7 @@ def write_asset_manifest(
     style: str | None,
     pipeline_result: Any,
     budget_summary: dict[str, Any],
+    execution_mode: str = "autoreason",
 ) -> Path:
     root = layout.asset_set_dir
     source_root = layout.source_dir
@@ -181,6 +184,7 @@ def write_asset_manifest(
         } if project_name or project_slug or project_file else None,
         "context_file": context_file,
         "style": style,
+        "execution_mode": execution_mode,
         "source_artifacts": source_artifacts,
         "distribution_dir": (
             str((root / "distribution").relative_to(root))

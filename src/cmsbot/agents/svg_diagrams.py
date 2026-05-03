@@ -206,7 +206,6 @@ def sanitize_svg(raw_svg: str) -> str:
         for attr_name, attr_value in list(elem.attrib.items()):
             local_attr = _local_name(attr_name)
             value = attr_value.strip()
-            lowered = value.lower()
 
             if local_attr in {"href", "xlink:href"}:
                 raise SvgValidationError("External references are not allowed")

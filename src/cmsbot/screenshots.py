@@ -13,7 +13,10 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from cmsbot.config import Config
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 MANIFEST_FILENAME = "manifest.json"

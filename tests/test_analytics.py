@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from cmsbot.analytics import load_performance_index, record_social_metrics
+from cmsbot.analytics import import_social_csv, load_performance_index, record_social_metrics
 from cmsbot.content_ops import build_content_calendar
 
 
@@ -88,3 +88,27 @@ def test_build_content_calendar_uses_recent_analytics_signals():
     assert first_entry["asset_set"][0] == "carousel"
     assert first_entry["distribution_slots"][0]["slot_id"].startswith(first_entry["id"])
     assert any("winning hook style" in angle for angle in first_entry["hook_angles"])
+
+
+def test_import_social_csv_maps_common_platform_columns(tmp_path):
+    csv_path = tmp_path / "social.csv"
+    csv_path.write_text(
+        "asset_set_id,platform,format,views,saves,shares,comments,link clicks,score,date\n"
+        "asset-1,instagram,carousel,10000,320,40,12,80,91.5,2026-05-01\n",
+        encoding="utf-8",
+    )
+
+    imported, destination = import_social_csv(
+        tmp_path / "output",
+        csv_path,
+        platform="instagram",
+        format="carousel",
+    )
+
+    assert imported == 1
+    assert destination.exists()
+    records = load_performance_index(tmp_path / "output")
+    assert records[0]["asset_set_id"] == "asset-1"
+    assert records[0]["views_7d"] == 10000
+    assert records[0]["link_clicks"] == 80
+    assert records[0]["performance_score"] == 91.5

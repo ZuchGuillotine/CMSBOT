@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "score_thresholds": {
+    "pass": 80,
+    "human_review": 65,
+    "rewrite": 50
+  },
+  "review_dimensions": [
+    "generic phrasing",
+    "inflated claims",
+    "repetitive sentence structure",
+    "overly symmetrical formatting",
+    "platform mismatch",
+    "CTA awkwardness",
+    "jargon density",
+    "lack of concrete examples",
+    "human-edit likelihood",
+    "visual prompt artifact risk"
+  ]
+}

@@ -13,10 +13,10 @@ import click
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 
 from cmsbot.analytics import (
     import_seo_evaluation as import_seo_evaluation_report,
+    import_social_csv,
     load_performance_index,
     record_social_metrics,
     render_performance_report,
@@ -33,6 +33,14 @@ from cmsbot.content_ops import (
     write_source_brief,
 )
 from cmsbot.context import build_enriched_prompt, list_styles, load_context_file, load_style
+from cmsbot.de_ai import review_de_ai
+from cmsbot.gates import evaluate_asset_gates, record_human_approval
+from cmsbot.goals import (
+    initialize_ops_scaffold,
+    load_goal_statuses,
+    prepare_goal_handoff,
+    summarize_goal_run,
+)
 from cmsbot.pipeline import AutoreasonPipeline
 from cmsbot.project import (
     combine_context_text,
@@ -40,6 +48,7 @@ from cmsbot.project import (
     make_project_profile,
     write_project_profile,
 )
+from cmsbot.routing import decide_model_route, load_model_routing
 from cmsbot.social_derivatives import export_carousel, export_video_script
 from cmsbot.social_threads import export_social_thread
 from cmsbot.screenshots import (
@@ -57,6 +66,7 @@ from cmsbot.topics import (
     merge_topic_briefs,
 )
 from cmsbot.voice import synthesize_voice
+from cmsbot.workflow import finish_run, load_latest_runs, start_run
 
 console = Console()
 
@@ -119,6 +129,13 @@ def main():
     default=None,
     help="Path to .env file.",
 )
+@click.option(
+    "--execution-mode",
+    type=click.Choice(["autoreason", "single_model", "agent_assisted", "human_seeded"]),
+    default="autoreason",
+    show_default=True,
+    help="Execution strategy marker. Only autoreason runs in-core; other modes are for external agent workflows.",
+)
 def generate(
     prompt: str,
     content_type: str,
@@ -129,8 +146,16 @@ def generate(
     project_file: str | None,
     style: str | None,
     env_file: str | None,
+    execution_mode: str,
 ):
     """Generate refined content using the Autoreason multi-agent pipeline."""
+    if execution_mode != "autoreason":
+        console.print(
+            "[red]Error:[/red] In-core generation currently supports only `autoreason`. "
+            "Use `cmsbot goal prepare` for agent_assisted or human_seeded workflows."
+        )
+        sys.exit(1)
+
     # Load config
     config = Config.from_env(env_file)
     project = None
@@ -190,6 +215,7 @@ def generate(
         project_file=project_file,
         context_file=context_file,
         style=style,
+        execution_mode=execution_mode,
     )
 
     # Verify at least one provider is configured
@@ -251,6 +277,7 @@ def generate(
         style=style,
         pipeline_result=result,
         budget_summary=pipeline.budget.summary(),
+        execution_mode=execution_mode,
     )
 
     # Show results
@@ -530,7 +557,6 @@ def export_video_script_command(
 def check():
     """Check which API providers are configured."""
     config = Config.from_env()
-    available = config.available_providers()
 
     table = Table(title="Provider Status")
     table.add_column("Provider", style="bold")
@@ -590,7 +616,7 @@ def styles():
         table.add_row(name, source, preview)
 
     console.print(table)
-    console.print(f"\n[dim]Add custom styles to ./styles/*.md to override or extend.[/dim]")
+    console.print("\n[dim]Add custom styles to ./styles/*.md to override or extend.[/dim]")
 
 
 @main.command("topics")
@@ -658,6 +684,278 @@ def topics(
         console.print()
 
     console.print(f"[dim]Loaded {len(merged)} topic briefs from {chosen_file}.[/dim]")
+
+
+@main.group()
+def goal():
+    """Manage repo-backed goals and resumable workflow state."""
+    pass
+
+
+@goal.command("init")
+@click.option(
+    "--root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Repository or project root where goals/ and strategy/ should be created.",
+)
+@click.option("--overwrite", is_flag=True, help="Overwrite existing goal and strategy files.")
+def goal_init(root: Path, overwrite: bool):
+    """Create default goal specs and strategy memory files."""
+    written = initialize_ops_scaffold(root, overwrite=overwrite)
+    if not written:
+        console.print(f"[dim]No files written. Existing scaffold preserved under {root}.[/dim]")
+        return
+
+    table = Table(title="CMSBOT Goal Scaffold")
+    table.add_column("File", style="bold")
+    for path in written:
+        table.add_row(str(path))
+    console.print(table)
+
+
+@goal.command("status")
+@click.option(
+    "--root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Repository or project root containing goals/.",
+)
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+@click.option("--runs", type=int, default=5, show_default=True, help="Number of recent workflow runs to show.")
+def goal_status(root: Path, env_file: str | None, runs: int):
+    """Show durable goal status and recent run records."""
+    statuses = load_goal_statuses(root)
+    if statuses:
+        table = Table(title=f"Goals ({root / 'goals'})")
+        table.add_column("Goal", style="bold")
+        table.add_column("Status")
+        table.add_column("Cadence")
+        table.add_column("Owner")
+        table.add_column("Budget")
+        table.add_column("File")
+        for entry in statuses:
+            table.add_row(
+                entry.title,
+                entry.status,
+                entry.cadence,
+                entry.owner,
+                entry.budget,
+                str(entry.path),
+            )
+        console.print(table)
+    else:
+        console.print(f"[dim]No goal specs found under {root / 'goals'}. Run `cmsbot goal init`.[/dim]")
+
+    config = Config.from_env(env_file)
+    recent_runs = load_latest_runs(config.output_dir, limit=runs)
+    if not recent_runs:
+        console.print(f"[dim]No workflow runs found under {config.output_dir / 'runs'}.[/dim]")
+        return
+
+    run_table = Table(title=f"Recent Runs ({config.output_dir / 'runs'})")
+    run_table.add_column("Run ID", style="bold")
+    run_table.add_column("Kind")
+    run_table.add_column("Status")
+    run_table.add_column("Finished")
+    run_table.add_column("Next Safe Action")
+    for record in recent_runs:
+        run_table.add_row(
+            str(record.get("run_id") or ""),
+            str(record.get("kind") or ""),
+            str(record.get("status") or ""),
+            str(record.get("finished_at") or ""),
+            str(record.get("next_safe_action") or "")[:80],
+        )
+    console.print(run_table)
+
+
+@goal.command("prepare")
+@click.argument("goal_name")
+@click.option(
+    "--root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Repository or project root containing goals/ and strategy/.",
+)
+@click.option("--project-file", type=click.Path(exists=True), default=None, help="Optional project profile to include in the handoff.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+def goal_prepare(goal_name: str, root: Path, project_file: str | None, env_file: str | None):
+    """Prepare a resumable handoff bundle for a scheduled goal run."""
+    config = Config.from_env(env_file)
+    try:
+        handoff, run_path, handoff_path = prepare_goal_handoff(
+            root,
+            config.output_dir,
+            goal=goal_name,
+            project_file=project_file,
+        )
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    console.print(
+        Panel.fit(
+            f"[bold]Goal Handoff Prepared[/bold]\n\n"
+            f"[dim]Goal:[/dim]    {handoff['goal']}\n"
+            f"[dim]Run:[/dim]     {handoff['run_id']}\n"
+            f"[dim]Record:[/dim]  {run_path}\n"
+            f"[dim]Handoff:[/dim] {handoff_path}",
+            border_style="cyan",
+        )
+    )
+
+
+@goal.command("summarize")
+@click.option("--run-id", default=None, help="Run id to summarize. Defaults to the latest run.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+def goal_summarize(run_id: str | None, env_file: str | None):
+    """Write a markdown summary for a workflow run."""
+    config = Config.from_env(env_file)
+    try:
+        record, summary_path = summarize_goal_run(config.output_dir, run_id=run_id)
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    console.print(
+        Panel.fit(
+            f"[bold]Run Summary Written[/bold]\n\n"
+            f"[dim]Run:[/dim]     {record.get('run_id')}\n"
+            f"[dim]Status:[/dim]  {record.get('status')}\n"
+            f"[dim]Summary:[/dim] {summary_path}",
+            border_style="cyan",
+        )
+    )
+
+
+@main.group()
+def review():
+    """Review generated artifacts before approval or publishing."""
+    pass
+
+
+@review.command("de-ai")
+@click.argument("asset_set_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--platform", required=True, help="Platform name such as blog, x, instagram, linkedin, or tiktok.")
+@click.option("--format", "content_format", required=True, help="Artifact format such as blog, thread, carousel, or video_script.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+@click.option("--provider", default=None, help="Optional provider for LLM-assisted review.")
+@click.option("--llm/--no-llm", default=False, show_default=True, help="Use an LLM reviewer in addition to deterministic heuristics.")
+@click.option("--save/--no-save", default=True, show_default=True, help="Write de_ai_report.json and review.md artifacts.")
+def review_de_ai_command(
+    asset_set_dir: Path,
+    platform: str,
+    content_format: str,
+    env_file: str | None,
+    provider: str | None,
+    llm: bool,
+    save: bool,
+):
+    """Run a platform-aware de-AI review for one generated artifact."""
+    config = Config.from_env(env_file)
+    run_record, run_path = start_run(
+        config.output_dir,
+        kind="de-ai-review",
+        parameters={
+            "asset_set_dir": str(asset_set_dir),
+            "platform": platform,
+            "format": content_format,
+            "llm": llm,
+            "provider": provider,
+            "save": save,
+        },
+        files=[asset_set_dir],
+    )
+    try:
+        report, report_path, review_path = review_de_ai(
+            asset_set_dir,
+            platform=platform,
+            content_format=content_format,
+            output_root=config.output_dir,
+            env_file=env_file,
+            provider_name=provider,
+            use_llm=llm,
+            save=save,
+        )
+    except Exception as e:
+        finish_run(
+            run_path,
+            status="failed",
+            failure_reason=str(e),
+            resume_instruction="Fix the artifact path, provider configuration, or review target and rerun the command.",
+            next_safe_action="Run `cmsbot review de-ai` again with the same asset set after resolving the failure.",
+        )
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+
+    changed = [path for path in (report_path, review_path) if path is not None]
+    finish_run(
+        run_path,
+        status="completed",
+        files_changed=changed,
+        cost_summary={"llm_review": llm},
+        summary=f"Reviewed {report['asset_set_id']} for {platform}/{content_format}.",
+        next_safe_action=(
+            "Human review required before approval."
+            if report.get("requires_human_review")
+            else "Artifact can proceed to approval review."
+        ),
+    )
+    console.print(
+        Panel.fit(
+            f"[bold]De-AI Review Complete[/bold]\n\n"
+            f"[dim]Asset Set:[/dim] {report['asset_set_id']}\n"
+            f"[dim]Platform:[/dim]  {report['platform']}\n"
+            f"[dim]Format:[/dim]    {report['format']}\n"
+            f"[dim]Score:[/dim]     {report['score']}\n"
+            f"[dim]Risk:[/dim]      {report['risk_level']}\n"
+            f"[dim]Human:[/dim]     {report['requires_human_review']}\n"
+            f"[dim]Report:[/dim]    {report_path or 'not saved'}\n"
+            f"[dim]Review:[/dim]    {review_path or 'not saved'}\n"
+            f"[dim]Run:[/dim]       {run_record['run_id']}",
+            border_style="yellow",
+        )
+    )
+
+
+@review.command("gates")
+@click.argument("asset_set_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--json-output", is_flag=True, help="Print raw gate JSON instead of a table.")
+def review_gates(asset_set_dir: Path, json_output: bool):
+    """Show deterministic review-gate status for an asset set."""
+    payload = evaluate_asset_gates(asset_set_dir)
+    if json_output:
+        console.print(json.dumps(payload, indent=2))
+        return
+
+    table = Table(title=f"Review Gates ({payload['asset_set_id']})")
+    table.add_column("Gate", style="bold")
+    table.add_column("Status")
+    table.add_column("Reason")
+    for name, gate in payload["gates"].items():
+        status = "[green]passed[/green]" if gate["passed"] else "[yellow]blocked[/yellow]"
+        table.add_row(name, status, str(gate["reason"]))
+    console.print(table)
+
+
+@review.command("approve")
+@click.argument("asset_set_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--approved-by", required=True, help="Name or handle of the human approver.")
+@click.option("--notes", default=None, help="Optional approval notes.")
+def review_approve(asset_set_dir: Path, approved_by: str, notes: str | None):
+    """Record explicit human approval for an asset set."""
+    payload, approval_path = record_human_approval(asset_set_dir, approved_by=approved_by, notes=notes)
+    console.print(
+        Panel.fit(
+            f"[bold]Human Approval Recorded[/bold]\n\n"
+            f"[dim]Approved By:[/dim] {payload['approved_by']}\n"
+            f"[dim]Approval:[/dim]    {approval_path}",
+            border_style="green",
+        )
+    )
 
 
 @main.group()
@@ -771,6 +1069,34 @@ def analytics_import_seo_eval(report_file: Path, env_file: str | None):
             f"[dim]Records:[/dim] {imported}\n"
             f"[dim]Index:[/dim]   {destination}",
             border_style="blue",
+        )
+    )
+
+
+@analytics.command("import-social-csv")
+@click.option("--file", "csv_file", type=click.Path(exists=True, path_type=Path), required=True, help="Social analytics CSV export.")
+@click.option("--platform", required=True, help="Fallback platform for rows without a platform column.")
+@click.option("--format", "content_format", required=True, help="Fallback format for rows without a format column.")
+@click.option("--env-file", type=click.Path(exists=True), default=None, help="Path to .env file.")
+def analytics_import_social_csv(csv_file: Path, platform: str, content_format: str, env_file: str | None):
+    """Import social analytics from a flexible CSV export."""
+    config = Config.from_env(env_file)
+    try:
+        imported, destination = import_social_csv(
+            config.output_dir,
+            csv_file,
+            platform=platform,
+            format=content_format,
+        )
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    console.print(
+        Panel.fit(
+            f"[bold]Social CSV Imported[/bold]\n\n"
+            f"[dim]Rows:[/dim]  {imported}\n"
+            f"[dim]Index:[/dim] {destination}",
+            border_style="green",
         )
     )
 
@@ -927,6 +1253,59 @@ def calendar_show(calendar_file: Path | None, env_file: str | None, limit: int):
 
     console.print(table)
     console.print(f"\n[dim]Showing {min(limit, len(entries))} of {len(entries)} entries.[/dim]")
+
+
+@main.group()
+def routing():
+    """Inspect model-routing policy and escalation decisions."""
+    pass
+
+
+@routing.command("show")
+@click.option(
+    "--root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Repository or project root containing strategy/model-routing.json.",
+)
+def routing_show(root: Path):
+    """Print configured model-routing policy."""
+    payload = load_model_routing(root)
+    console.print(json.dumps(payload, indent=2))
+
+
+@routing.command("decide")
+@click.argument("work_type")
+@click.option(
+    "--trigger",
+    "triggers",
+    multiple=True,
+    help="Active escalation trigger. Can be provided more than once.",
+)
+@click.option(
+    "--root",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=Path("."),
+    show_default=True,
+    help="Repository or project root containing strategy/model-routing.json.",
+)
+def routing_decide(work_type: str, triggers: tuple[str, ...], root: Path):
+    """Show the deterministic route for one work type and trigger set."""
+    policy = load_model_routing(root)
+    decision = decide_model_route(policy, work_type=work_type, triggers=list(triggers))
+    console.print(
+        json.dumps(
+            {
+                "work_type": decision.work_type,
+                "tier": decision.tier,
+                "escalate": decision.escalate,
+                "matched_triggers": decision.matched_triggers,
+                "policy": decision.policy,
+            },
+            indent=2,
+        )
+    )
 
 
 @main.group()

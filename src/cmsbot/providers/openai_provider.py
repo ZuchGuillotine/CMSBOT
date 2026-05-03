@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 
-import httpx
 import openai
 
 from cmsbot.budget import GPT_IMAGE_COSTS, compute_cost

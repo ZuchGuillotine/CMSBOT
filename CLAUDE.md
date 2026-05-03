@@ -16,6 +16,14 @@ cmsbot generate "Your prompt" --context-file contexts/my-brand.md --style casual
 cmsbot check     # show configured providers
 cmsbot models    # show model pricing table
 cmsbot styles    # show available writing styles
+cmsbot goal init # create goals/ and strategy/ scaffolding
+cmsbot goal status
+cmsbot goal prepare weekly-content-calendar --project-file projects/example-project.json
+cmsbot goal summarize
+cmsbot review de-ai output/asset-sets/YYYY/YYYY-MM/asset-set-id --platform instagram --format carousel
+cmsbot review gates output/asset-sets/YYYY/YYYY-MM/asset-set-id
+cmsbot analytics import-social-csv --file exports/instagram.csv --platform instagram --format carousel
+cmsbot routing decide source_draft --trigger regulated_claims
 
 # Run as module
 python -m cmsbot generate "Your prompt"
@@ -74,3 +82,14 @@ All providers implement `LLMProvider.generate()` → `LLMResponse` (normalized c
 - Templates are Jinja2 HTML in `src/cmsbot/templates/`, bundled via `tool.setuptools.package-data`.
 - Env var names are mixed case for backwards compat (`Anthropic_API_Key`, `OpenAI_API_Key`, `GEMINI_API_Key`) — config.py accepts both forms, plus `XAI_API_KEY` and `UNSPLASH_ACCESS_KEY` for optional image providers.
 - The `openai_provider.py` file contains both `OpenAIProvider` (standard) and `OpenAICompatProvider` (custom base_url for Qwen etc.).
+
+## Claude workflow state
+
+- Treat `goals/*.goal.md`, `strategy/*.json`, and `strategy/strategy-memory.md` as canonical long-running workflow memory.
+- `cmsbot goal prepare <goal>` writes `output/runs/<run-id>/handoff.md` plus `run.json`; use it as the starting point for scheduled Claude work.
+- `cmsbot goal status` shows active goals and recent resumable runs from `output/runs/`.
+- Create a PR only when a scheduled goal produces a non-empty validated diff to tracked planning, strategy, rubric, routing, or adapter-contract files.
+- Do not create PRs for routine asset output, single analytics imports, single de-AI reports, or external publishing.
+- `cmsbot review de-ai` writes `distribution/<platform>/de_ai_report.json`, `distribution/<platform>/review.md`, and an `output/runs/<run-id>/run.json` record.
+- `cmsbot review gates` shows `draft_ready`, `de_ai_passed`, `human_approved`, and `publish_ready`; publishing requires all gates to pass.
+- Publishing remains product-repo-specific and human-gated. Core should prepare artifacts and review reports, not post externally.

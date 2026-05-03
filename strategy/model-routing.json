@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "default_policy": "cost-aware",
+  "routing": {
+    "calendar_draft": {
+      "tier": "cheap",
+      "escalate_on": [
+        "strategy_change"
+      ]
+    },
+    "source_draft": {
+      "tier": "mid",
+      "escalate_on": [
+        "regulated_claims",
+        "high_reach"
+      ]
+    },
+    "final_polish": {
+      "tier": "premium",
+      "escalate_on": [
+        "de_ai_failed",
+        "human_review"
+      ]
+    },
+    "critique": {
+      "tier": "provider_diverse",
+      "require_different_provider": true
+    },
+    "analytics_summary": {
+      "tier": "cheap",
+      "escalate_on": [
+        "strategy_pivot"
+      ]
+    }
+  },
+  "limits": {
+    "max_premium_calls_per_asset_set": 2,
+    "max_rewrite_loops_per_artifact": 2
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "blog": {
+    "ai_tolerance": "medium",
+    "focus": [
+      "factual support",
+      "clear structure",
+      "search intent"
+    ],
+    "avoid": [
+      "unsupported claims",
+      "thin introductions",
+      "generic summaries"
+    ]
+  },
+  "x": {
+    "ai_tolerance": "low",
+    "focus": [
+      "sharp opening",
+      "specific opinion",
+      "compressed rhythm"
+    ],
+    "avoid": [
+      "corporate tone",
+      "thread boilerplate",
+      "over-explaining"
+    ]
+  },
+  "threads": {
+    "ai_tolerance": "low",
+    "focus": [
+      "conversational clarity",
+      "specific examples",
+      "human pacing"
+    ],
+    "avoid": [
+      "essay tone",
+      "empty hooks",
+      "generic CTAs"
+    ]
+  },
+  "instagram": {
+    "ai_tolerance": "medium",
+    "focus": [
+      "visual clarity",
+      "short slide copy",
+      "save-worthy framing"
+    ],
+    "avoid": [
+      "dense paragraphs",
+      "abstract claims",
+      "caption bloat"
+    ]
+  },
+  "tiktok": {
+    "ai_tolerance": "low",
+    "focus": [
+      "spoken rhythm",
+      "fast hook",
+      "clear visual beats"
+    ],
+    "avoid": [
+      "scripted essay language",
+      "slow setup",
+      "over-polished narration"
+    ]
+  },
+  "linkedin": {
+    "ai_tolerance": "medium",
+    "focus": [
+      "operational examples",
+      "credible takeaways",
+      "professional specificity"
+    ],
+    "avoid": [
+      "gimmicks",
+      "engagement bait",
+      "inflated expertise claims"
+    ]
+  }
+}

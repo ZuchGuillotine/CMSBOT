@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import csv
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -184,6 +185,51 @@ def import_seo_evaluation(
     return imported, index_path
 
 
+def import_social_csv(
+    output_root: str | Path,
+    csv_path: str | Path,
+    *,
+    platform: str,
+    format: str,
+) -> tuple[int, Path]:
+    """Import a flexible social analytics CSV into the shared performance index."""
+    imported = 0
+    index_path = performance_index_path(output_root)
+    with Path(csv_path).open(newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        for raw_row in reader:
+            row = {_normalize_header(key): value for key, value in raw_row.items() if key is not None}
+            asset_set_id = _first_text(row, "asset_set_id", "asset set id", "asset", "slug", "post_id", "post id")
+            if not asset_set_id:
+                continue
+            record, index_path = record_social_metrics(
+                output_root,
+                asset_set_id=asset_set_id,
+                platform=_first_text(row, "platform") or platform,
+                format=_first_text(row, "format", "content_format", "content format") or format,
+                slot_id=_first_text(row, "slot_id", "slot id"),
+                pillar=_first_text(row, "pillar"),
+                topic=_first_text(row, "topic"),
+                hook=_first_text(row, "hook"),
+                source_blog=_first_text(row, "source_blog", "source blog"),
+                posted_date=_first_text(row, "posted_date", "posted date", "date"),
+                views_24h=_first_int(row, "views_24h", "views 24h"),
+                views_48h=_first_int(row, "views_48h", "views 48h"),
+                views_7d=_first_int(row, "views_7d", "views 7d", "views", "plays"),
+                impressions=_first_int(row, "impressions", "reach"),
+                saves=_first_int(row, "saves"),
+                shares=_first_int(row, "shares", "reposts"),
+                comments=_first_int(row, "comments", "replies"),
+                profile_visits=_first_int(row, "profile_visits", "profile visits"),
+                link_clicks=_first_int(row, "link_clicks", "link clicks", "clicks"),
+                conversions=_first_int(row, "conversions"),
+                performance_score=_first_float_or_none(row, "performance_score", "performance score", "score"),
+                notes=_first_text(row, "notes"),
+            )
+            imported += 1
+    return imported, index_path
+
+
 def summarize_recent_signals(
     records: list[dict[str, Any]],
     *,
@@ -248,6 +294,41 @@ def _record_key(record: dict[str, Any]) -> tuple[str, str, str, str]:
         str(record.get("platform") or ""),
         str(record.get("format") or ""),
     )
+
+
+def _normalize_header(value: str) -> str:
+    return value.strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _first_text(row: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = row.get(_normalize_header(key))
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _first_int(row: dict[str, Any], *keys: str) -> int:
+    text = _first_text(row, *keys)
+    if not text:
+        return 0
+    try:
+        return int(float(text.replace(",", "")))
+    except ValueError:
+        return 0
+
+
+def _first_float_or_none(row: dict[str, Any], *keys: str) -> float | None:
+    text = _first_text(row, *keys)
+    if not text:
+        return None
+    try:
+        return float(text.replace(",", ""))
+    except ValueError:
+        return None
 
 
 def _parse_date(value: Any) -> datetime:

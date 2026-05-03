@@ -58,7 +58,6 @@ def _markdown_to_html(content: str, images: list[ImageSpec]) -> str:
     in_list = False
     in_code_block = False
     in_table = False
-    table_headers: list[str] = []
     section_count = 0
 
     for line in lines:
@@ -95,7 +94,6 @@ def _markdown_to_html(content: str, images: list[ImageSpec]) -> str:
             if not in_table:
                 # First row of a new table — treat as header
                 in_table = True
-                table_headers = cells
                 html_parts.append('<table>')
                 html_parts.append('<thead><tr>')
                 for cell in cells:
@@ -114,7 +112,6 @@ def _markdown_to_html(content: str, images: list[ImageSpec]) -> str:
         if in_table:
             html_parts.append('</tbody></table>')
             in_table = False
-            table_headers = []
 
         # Empty line
         if not stripped:

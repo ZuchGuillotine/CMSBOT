@@ -20,6 +20,12 @@ CMSBOT is the reusable content and marketing core that can be pointed at differe
   Derives creator-ready Instagram or LinkedIn carousel packages from generated source content.
 - `cmsbot export-video-script`
   Derives creator-ready short-form video script packages from generated source content.
+- `cmsbot review ...`
+  Runs pre-publish review gates such as platform-aware de-AI checks.
+- `cmsbot goal ...`
+  Initializes repo-backed goal specs, strategy memory, and resumable run status for Codex/Claude workflows.
+- `cmsbot routing ...`
+  Reads `strategy/model-routing.json` and explains model tier escalation decisions.
 - `cmsbot analytics ...`
   Logs social performance, imports SEO evaluation output, and summarizes cross-platform winners keyed by asset set ids.
 - [`seo/`](./seo/README.md)
@@ -105,6 +111,14 @@ Bootstrap creates `.venv`, installs the Python package, and installs `seo` Node 
 ./run.sh export-blog-draft output/asset-sets/2026/2026-04/2026-04-18-lead-routing-mistakes
 ```
 
+7. Review platform artifacts before human approval or publishing.
+
+```bash
+./run.sh review de-ai output/asset-sets/2026/2026-04/2026-04-18-lead-routing-mistakes \
+  --platform instagram \
+  --format carousel
+```
+
 ## Command Surface
 
 ```bash
@@ -127,10 +141,20 @@ Bootstrap creates `.venv`, installs the Python package, and installs `seo` Node 
 ./run.sh export-thread output/asset-sets/2026/2026-04/2026-04-18-lead-routing-mistakes --project-file projects/example-project.json --section 2 --image-mode auto
 ./run.sh export-carousel output/asset-sets/2026/2026-04/2026-04-18-lead-routing-mistakes --project-file projects/example-project.json --platform instagram
 ./run.sh export-video-script output/asset-sets/2026/2026-04/2026-04-18-lead-routing-mistakes --project-file projects/example-project.json --platform tiktok
+./run.sh review de-ai output/asset-sets/2026/2026-04/2026-04-18-lead-routing-mistakes --platform instagram --format carousel
+./run.sh review gates output/asset-sets/2026/2026-04/2026-04-18-lead-routing-mistakes
+
+./run.sh goal init
+./run.sh goal status
+./run.sh goal prepare weekly-content-calendar --project-file projects/example-project.json
+./run.sh goal summarize
 
 ./run.sh analytics log-social --asset-set-id 2026-04-18-lead-routing-mistakes --platform instagram --format carousel --views-7d 25000 --saves 1200
 ./run.sh analytics import-seo-eval --file seo/output/evaluation_YYYY-MM-DD.json
+./run.sh analytics import-social-csv --file exports/instagram.csv --platform instagram --format carousel
 ./run.sh analytics report --days 30
+
+./run.sh routing decide source_draft --trigger regulated_claims
 
 ./run.sh seo research
 ./run.sh seo evaluate
@@ -179,6 +203,7 @@ CMSBOT standardizes these portable artifacts:
 Product repos can add local context files, style overrides, curated topic briefs, screenshots, and publish adapters without changing the CMSBOT core.
 
 See [`docs/project-pack-integration.md`](./docs/project-pack-integration.md) for the repo-by-repo integration guide and wrapper example.
+See [`docs/next-generation-cmsbot-architecture.md`](./docs/next-generation-cmsbot-architecture.md) for the Codex/Claude-leveraged architecture audit and roadmap.
 
 ## SEO Workflow
 
@@ -282,6 +307,7 @@ Recurring content planning and performance tracking now sit alongside generation
   --saves 1200
 
 ./run.sh analytics import-seo-eval --file seo/output/evaluation_YYYY-MM-DD.json
+./run.sh analytics import-social-csv --file exports/instagram.csv --platform instagram --format carousel
 ./run.sh analytics report --days 30
 ```
 
@@ -291,6 +317,54 @@ Key behavior:
 - Generated entries now include stable `asset_set_id` and `slot_id` values.
 - `analytics log-social` writes a shared performance index and, when possible, an asset-set-local analytics file.
 - Recent analytics signals are fed back into future planning so stronger pillars, formats, and hook styles are prioritized.
+
+## Goal Workflows And Review Gates
+
+CMSBOT now keeps Codex/Claude-friendly operating state in plain files:
+
+```bash
+./run.sh goal init
+./run.sh goal status
+```
+
+`goal init` creates reusable goal specs in `goals/` and strategy memory in `strategy/`. These files are the durable handoff layer for scheduled Codex/Claude work; chat memory can help, but these repo files are the source of truth.
+
+Prepare a scheduled agent run with:
+
+```bash
+./run.sh goal prepare weekly-content-calendar --project-file projects/northstar-crm.json
+./run.sh goal summarize
+```
+
+`goal prepare` writes `output/runs/<run-id>/handoff.md` and `run.json`. The handoff explicitly states the PR cue: create a PR only when the scheduled goal produces a non-empty, validated diff to tracked planning, strategy, rubric, routing, or adapter-contract files. Routine asset output, single analytics imports, single de-AI reports, and external publishing should not create PRs.
+
+Run de-AI review after creating a distribution artifact:
+
+```bash
+./run.sh review de-ai output/asset-sets/2026/2026-04/2026-04-18-lead-routing-mistakes \
+  --platform instagram \
+  --format carousel
+```
+
+The review command works without API keys using deterministic heuristics. Add `--llm --provider openai` or another configured provider when a premium qualitative review is worth the cost. Each run writes a resumable state record under `output/runs/<run-id>/run.json`.
+
+Review gates are explicit:
+
+```bash
+./run.sh review gates output/asset-sets/2026/2026-04/2026-04-18-lead-routing-mistakes
+./run.sh review approve output/asset-sets/2026/2026-04/2026-04-18-lead-routing-mistakes --approved-by "Human Name"
+```
+
+`publish_ready` requires source content, passing de-AI reports, and recorded human approval. CMSBOT still does not publish externally; product repos own publish adapters.
+
+Model routing is file-backed:
+
+```bash
+./run.sh routing show
+./run.sh routing decide source_draft --trigger regulated_claims
+```
+
+The routing command explains whether a work type should stay on a cheaper tier or escalate to premium based on `strategy/model-routing.json`.
 
 ## Output Layout
 
@@ -312,8 +386,17 @@ output/
           distribution/
             x/
             instagram/
+              de_ai_report.json
+              review.md
             tiktok/
           analytics/
+          approval/
+            approval.json
+  runs/
+    20260502T120000Z-de-ai-review/
+      run.json
+      handoff.md
+      summary.md
   calendar/
     content-calendar.json
     performance-index.json
@@ -356,6 +439,8 @@ For blog image generation, CMSBOT can use any configured combination of Grok Ima
 src/cmsbot/         Python package and CLI
 projects/           Example project profiles
 contexts/           Optional generated or hand-authored markdown contexts
+goals/              Codex/Claude-ready recurring goal specs
+strategy/           Durable strategy memory, platform profiles, rubrics, and model routing
 seo/                Node-based SEO research and evaluation toolkit
 slideshow/          Short-form content repurposing pipeline
 output/             Generated asset sets, calendars, and analytics indexes
