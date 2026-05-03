@@ -264,14 +264,16 @@ class GPTImageProvider(ImageProvider):
         prompt: str,
         size: str = "1024x1024",
     ) -> ImageResult:
-        response = await self._client.images.generate(
+        params = dict(
             model=self.model,
             prompt=prompt,
             size=size,
             quality=self.quality,
             n=1,
-            response_format="b64_json",
         )
+        if not _returns_base64_by_default(self.model):
+            params["response_format"] = "b64_json"
+        response = await self._client.images.generate(**params)
         image_bytes = base64.b64decode(response.data[0].b64_json)
         return ImageResult(
             image_bytes=image_bytes,
@@ -279,3 +281,8 @@ class GPTImageProvider(ImageProvider):
             model=self.model,
             cost=GPT_IMAGE_COSTS.get((size, self.quality), 0.042),
         )
+
+
+def _returns_base64_by_default(model: str) -> bool:
+    normalized = model.lower()
+    return normalized.startswith("gpt-image") or normalized.startswith("chatgpt-image")

@@ -68,15 +68,18 @@ class OpenAIProvider(LLMProvider):
         """Generate an image with GPT Image, post-process, and save as JPEG. Returns cost."""
         from cmsbot.postprocess import postprocess_blog_image
 
+        model = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
         quality = "high" if placement == "hero" else "medium"
-        response = await self._client.images.generate(
-            model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2"),
+        params = dict(
+            model=model,
             prompt=prompt,
             size=size,
             quality=quality,
             n=1,
-            response_format="b64_json",
         )
+        if not _returns_base64_by_default(model):
+            params["response_format"] = "b64_json"
+        response = await self._client.images.generate(**params)
 
         image_data = base64.b64decode(response.data[0].b64_json)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,6 +93,11 @@ class OpenAIProvider(LLMProvider):
             raw_path.unlink(missing_ok=True)
 
         return GPT_IMAGE_COSTS.get(size, 0.042)
+
+
+def _returns_base64_by_default(model: str) -> bool:
+    normalized = model.lower()
+    return normalized.startswith("gpt-image") or normalized.startswith("chatgpt-image")
 
 
 class OpenAICompatProvider(LLMProvider):
