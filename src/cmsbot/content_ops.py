@@ -63,6 +63,7 @@ def prepare_generate_layout(
     prompt: str,
     *,
     requested_output_dir: str | Path | None = None,
+    requested_asset_set_id: str | None = None,
     run_date: date | None = None,
 ) -> GenerateLayout:
     if requested_output_dir is not None:
@@ -74,8 +75,9 @@ def prepare_generate_layout(
             source_dir=source_dir,
         )
 
-    run_date = run_date or date.today()
-    base_id = f"{run_date.isoformat()}-{slugify_token(prompt, max_length=48)}"
+    asset_set_id = slugify_token(requested_asset_set_id, max_length=120) if requested_asset_set_id else None
+    run_date = run_date or _date_from_asset_set_id(asset_set_id) or date.today()
+    base_id = asset_set_id or f"{run_date.isoformat()}-{slugify_token(prompt, max_length=48)}"
     base_dir = (
         Path(output_root)
         / "asset-sets"
@@ -90,6 +92,18 @@ def prepare_generate_layout(
         asset_set_dir=asset_set_dir,
         source_dir=asset_set_dir / "source",
     )
+
+
+def _date_from_asset_set_id(asset_set_id: str | None) -> date | None:
+    if not asset_set_id:
+        return None
+    match = re.match(r"^(\d{4})-(\d{2})-(\d{2})(?:-|$)", asset_set_id)
+    if not match:
+        return None
+    try:
+        return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return None
 
 
 def initialize_generate_layout(layout: GenerateLayout) -> None:

@@ -129,7 +129,7 @@ class NanobananProvider(ImageProvider):
 
         config_params = {
             "response_modalities": ["IMAGE"],
-            "image_generation_config": genai_types.ImageGenerationConfig(
+            "image_config": genai_types.ImageConfig(
                 aspect_ratio=aspect_ratios.get(orientation, "16:9"),
                 image_size=image_size,
             ),

@@ -29,6 +29,25 @@ def test_prepare_generate_layout_uses_asset_set_structure_for_default_runs(tmp_p
     assert layout.asset_set_id.startswith(date.today().isoformat())
 
 
+def test_prepare_generate_layout_accepts_calendar_asset_set_id(tmp_path):
+    layout = prepare_generate_layout(
+        tmp_path,
+        "How to track recovery",
+        requested_asset_set_id="2026-05-04-recovery-how-to-track-recovery",
+    )
+
+    assert layout.layout == "asset_set"
+    assert layout.asset_set_id == "2026-05-04-recovery-how-to-track-recovery"
+    assert layout.asset_set_dir == (
+        tmp_path
+        / "asset-sets"
+        / "2026"
+        / "2026-05"
+        / "2026-05-04-recovery-how-to-track-recovery"
+    )
+    assert layout.source_dir == layout.asset_set_dir / "source"
+
+
 def test_build_content_calendar_generates_entries_and_slots():
     content_ops = {
         "pillars": [

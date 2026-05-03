@@ -95,6 +95,11 @@ def main():
     help="Output directory (default: ./output/<slug>).",
 )
 @click.option(
+    "--asset-set-id",
+    default=None,
+    help="Canonical asset-set id for default output layout, e.g. a calendar entry id.",
+)
+@click.option(
     "--budget",
     type=float,
     default=None,
@@ -140,6 +145,7 @@ def generate(
     prompt: str,
     content_type: str,
     output_dir: str | None,
+    asset_set_id: str | None,
     budget: float | None,
     max_rounds: int | None,
     context_file: str | None,
@@ -169,6 +175,7 @@ def generate(
         config.output_dir,
         prompt,
         requested_output_dir=Path(output_dir) if output_dir else None,
+        requested_asset_set_id=asset_set_id,
     )
     initialize_generate_layout(layout)
     config.output_dir = layout.source_dir

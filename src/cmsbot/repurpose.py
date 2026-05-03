@@ -25,10 +25,14 @@ def load_source_context(context_file: str | Path | None) -> str | None:
 
 
 def pick_provider_name(config: Config) -> str:
+    available = config.available_providers()
     preferred = config.roles.author
-    if preferred in config.available_providers():
+    if preferred in available and preferred != "openai_compat":
         return preferred
-    return config.available_providers()[0]
+    for candidate in ("anthropic", "openai", "gemini", "anthropic_opus", "openai_compat"):
+        if candidate in available:
+            return candidate
+    return available[0]
 
 
 def run_json_generation(provider, *, system_prompt: str, prompt: str, max_tokens: int = 2400):
@@ -207,9 +211,19 @@ TASK:
 
 
 def parse_json_object(text: str, *, required_keys: list[str] | None = None) -> dict[str, Any]:
-    match = re.search(r"\{.*\}", text.strip(), re.DOTALL)
-    candidate = match.group(0) if match else text.strip()
-    payload = json.loads(candidate)
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
+        stripped = re.sub(r"\s*```$", "", stripped)
+    match = re.search(r"\{.*\}", stripped, re.DOTALL)
+    candidate = match.group(0) if match else stripped
+    if not candidate:
+        raise ValueError("Provider returned an empty response instead of a JSON object")
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError as exc:
+        preview = candidate[:240].replace("\n", " ")
+        raise ValueError(f"Provider returned invalid JSON: {exc}. Response preview: {preview!r}") from exc
     if not isinstance(payload, dict):
         raise ValueError("Response was not a JSON object")
     if required_keys:
