@@ -26,6 +26,62 @@ from cmsbot.providers.openai_provider import OpenAIProvider
 from cmsbot.renderer import Renderer
 
 
+def build_raster_image_providers(config: Config) -> list[ImageProvider]:
+    """Raster image providers in current quality-preference order."""
+    providers: list[ImageProvider] = []
+
+    if config.xai_key:
+        providers.append(GrokImageProvider(api_key=config.xai_key))
+
+    if config.openai:
+        providers.append(
+            GPTImageProvider(
+                api_key=config.openai.api_key,
+                model=config.openai_image_model,
+                quality="high",
+            )
+        )
+
+    if config.gemini:
+        providers.append(NanobananProvider(api_key=config.gemini.api_key))
+
+    return providers
+
+
+def build_image_director(config: Config, budget: BudgetTracker) -> ImageDirector:
+    """Image director with raster providers, optional Unsplash fetch, and a vision judge."""
+    director_provider = build_provider(config.provider_for("image_director"), config)
+    raster_image_providers = build_raster_image_providers(config)
+    fetch_provider: ImageProvider | None = None
+
+    if config.unsplash_key:
+        fetch_provider = UnsplashProvider(access_key=config.unsplash_key)
+
+    if not raster_image_providers and fetch_provider is None:
+        raise ValueError(
+            "No image providers configured. Set at least one of: "
+            "XAI_API_KEY, GEMINI_API_KEY, UNSPLASH_ACCESS_KEY, OPENAI_API_KEY"
+        )
+
+    # Image judge — use a vision-capable model (prefer GPT-4o for vision)
+    if config.openai:
+        judge_provider = OpenAIProvider(api_key=config.openai.api_key, model="gpt-4o")
+    elif config.anthropic:
+        judge_provider = build_provider("anthropic", config)
+    else:
+        judge_provider = director_provider
+
+    return ImageDirector(
+        director_provider=director_provider,
+        raster_image_providers=raster_image_providers,
+        fetch_provider=fetch_provider,
+        judge=ImageJudge(judge_provider),
+        budget=budget,
+        svg_provider=build_provider("anthropic", config) if config.anthropic else None,
+        svg_fallback_provider=build_provider("openai", config) if config.openai else None,
+    )
+
+
 class AutoreasonPipeline:
     """
     Multi-agent content refinement using the Autoreason pattern.
@@ -62,65 +118,9 @@ class AutoreasonPipeline:
         # Judge panel — 3 diverse providers where available
         self.judge_panel = JudgePanel([build_provider(name, cfg) for name in cfg.judge_providers()])
 
-        # Image providers — candidate order reflects current quality preference.
-        director_provider = build_provider(cfg.provider_for("image_director"), cfg)
-        raster_image_providers = self._build_raster_image_providers()
-        fetch_provider: ImageProvider | None = None
-
-        if self.config.unsplash_key:
-            fetch_provider = UnsplashProvider(access_key=self.config.unsplash_key)
-
-        if not raster_image_providers and fetch_provider is None:
-            raise ValueError(
-                "No image providers configured. Set at least one of: "
-                "XAI_API_KEY, GEMINI_API_KEY, UNSPLASH_ACCESS_KEY, OPENAI_API_KEY"
-            )
-
-        # Image judge — use a vision-capable model (prefer GPT-4o for vision)
-        if self.config.openai:
-            judge_provider = OpenAIProvider(
-                api_key=self.config.openai.api_key, model="gpt-4o"
-            )
-        elif self.config.anthropic:
-            judge_provider = build_provider("anthropic", self.config)
-        else:
-            judge_provider = director_provider
-        image_judge = ImageJudge(judge_provider)
-
-        svg_provider = build_provider("anthropic", self.config) if self.config.anthropic else None
-        svg_fallback_provider = build_provider("openai", self.config) if self.config.openai else None
-
-        self.image_director = ImageDirector(
-            director_provider=director_provider,
-            raster_image_providers=raster_image_providers,
-            fetch_provider=fetch_provider,
-            judge=image_judge,
-            budget=self.budget,
-            svg_provider=svg_provider,
-            svg_fallback_provider=svg_fallback_provider,
-        )
+        self.image_director = build_image_director(cfg, self.budget)
 
         self.renderer = Renderer()
-
-    def _build_raster_image_providers(self) -> list[ImageProvider]:
-        providers: list[ImageProvider] = []
-
-        if self.config.xai_key:
-            providers.append(GrokImageProvider(api_key=self.config.xai_key))
-
-        if self.config.openai:
-            providers.append(
-                GPTImageProvider(
-                    api_key=self.config.openai.api_key,
-                    model=self.config.openai_image_model,
-                    quality="high",
-                )
-            )
-
-        if self.config.gemini:
-            providers.append(NanobananProvider(api_key=self.config.gemini.api_key))
-
-        return providers
 
     async def run(
         self,

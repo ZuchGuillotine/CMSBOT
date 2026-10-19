@@ -41,6 +41,7 @@ from cmsbot.goals import (
     prepare_goal_handoff,
     summarize_goal_run,
 )
+from cmsbot.multipass import MultipassPipeline
 from cmsbot.pipeline import AutoreasonPipeline
 from cmsbot.project import (
     combine_context_text,
@@ -141,6 +142,15 @@ def main():
     show_default=True,
     help="Execution strategy marker. Only autoreason runs in-core; other modes are for external agent workflows.",
 )
+@click.option(
+    "--method",
+    type=click.Choice(["autoreason", "multipass"]),
+    default="autoreason",
+    show_default=True,
+    help="Long-form method. multipass plans structure first, grounds in PubMed, audits shape, and verifies citations.",
+)
+@click.option("--no-pubmed", is_flag=True, default=False, help="multipass: skip the PubMed source search.")
+@click.option("--no-images", is_flag=True, default=False, help="multipass: skip image generation.")
 def generate(
     prompt: str,
     content_type: str,
@@ -153,8 +163,11 @@ def generate(
     style: str | None,
     env_file: str | None,
     execution_mode: str,
+    method: str,
+    no_pubmed: bool,
+    no_images: bool,
 ):
-    """Generate refined content using the Autoreason multi-agent pipeline."""
+    """Generate refined content using the Autoreason or multipass pipeline."""
     if execution_mode != "autoreason":
         console.print(
             "[red]Error:[/red] In-core generation currently supports only `autoreason`. "
@@ -170,6 +183,11 @@ def generate(
         config.budget_cap = budget
     if max_rounds is not None:
         config.max_rounds = max_rounds
+
+    output_root = config.output_dir
+    if method == "multipass" and content_type != "blog":
+        console.print("[red]Error:[/red] --method multipass supports --type blog only.")
+        sys.exit(1)
 
     layout = prepare_generate_layout(
         config.output_dir,
@@ -241,7 +259,7 @@ def generate(
     style_label = style or "none"
     console.print()
     console.print(Panel.fit(
-        f"[bold]CMSBOT Autoreason Pipeline[/bold]\n\n"
+        f"[bold]CMSBOT {'Multipass' if method == 'multipass' else 'Autoreason'} Pipeline[/bold]\n\n"
         f"[dim]Prompt:[/dim]   {prompt}\n"
         f"[dim]Type:[/dim]     {content_type}\n"
         f"[dim]Context:[/dim]  {context_label}\n"
@@ -256,15 +274,24 @@ def generate(
     console.print()
 
     # Run pipeline
-    pipeline = AutoreasonPipeline(config)
+    artifacts = None
+    if method == "multipass":
+        pipeline = MultipassPipeline(config, use_pubmed=not no_pubmed, images=not no_images)
+    else:
+        pipeline = AutoreasonPipeline(config)
     pipeline.set_logger(lambda msg: console.print(msg))
 
     try:
-        result = asyncio.run(pipeline.run(
-            task_prompt=task_prompt,
-            content_type=content_type,
-            output_dir=layout.source_dir,
-        ))
+        if method == "multipass":
+            result, artifacts = asyncio.run(pipeline.run(
+                task_prompt, layout.source_dir, ledger_dir=output_root,
+            ))
+        else:
+            result = asyncio.run(pipeline.run(
+                task_prompt=task_prompt,
+                content_type=content_type,
+                output_dir=layout.source_dir,
+            ))
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user.[/yellow]")
         sys.exit(1)
@@ -295,6 +322,12 @@ def generate(
         source_dir=layout.source_dir,
         manifest_path=manifest_path,
     )
+    if artifacts is not None:
+        unverified = [c for c in artifacts.claims if c["verification"]["status"] != "verified"]
+        console.print(f"\n[bold]Review notes[/bold]: {len(artifacts.gaps)} gap(s) to fill, "
+                      f"{len(unverified)} claim(s) without a verified citation.")
+        for gap in artifacts.gaps:
+            console.print(f"  [yellow][{gap}][/yellow]")
 
 
 @main.command("export-blog-draft")

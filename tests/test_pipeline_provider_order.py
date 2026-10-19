@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from cmsbot.config import Config, ProviderConfig
-from cmsbot.pipeline import AutoreasonPipeline
+from cmsbot.pipeline import AutoreasonPipeline, build_raster_image_providers
 
 
 class StubProvider:
@@ -38,7 +38,7 @@ def test_raster_image_providers_use_quality_preference_order(monkeypatch):
         )
     )
 
-    providers = pipeline._build_raster_image_providers()
+    providers = build_raster_image_providers(pipeline.config)
 
     assert [provider.name for provider in providers] == ["grok", "gpt_image", "nanobanana"]
     assert providers[1].model == "gpt-image-2"

@@ -431,7 +431,30 @@ XAI_API_KEY=
 UNSPLASH_ACCESS_KEY=
 ```
 
-For blog image generation, CMSBOT can use any configured combination of Grok Imagine, Nano Banana, Unsplash, and DALL-E fallback, then run an image judge to pick the most natural-looking candidate.
+For blog image generation, CMSBOT can use any configured combination of Grok Imagine, Nano Banana, Unsplash, and GPT Image, then run an image judge to pick the most natural-looking candidate.
+
+Any single LLM key is enough: each pipeline role (author, strawman, rewriter, synthesizer, judges, planner,
+restructurer, auditor) falls back to a configured provider. Override with `CMSBOT_ROLE_<ROLE>=<provider>`
+(`CMSBOT_ROLE_JUDGES=anthropic_opus,openai,gemini`). Claude defaults are `claude-sonnet-5-5` (`ANTHROPIC_MODEL`)
+and `claude-opus-5-5` (`ANTHROPIC_OPUS_MODEL`). Other knobs: `CMSBOT_DE_AI_RUBRIC_FILE` (de-AI thresholds),
+`CMSBOT_VARIETY_LEDGER` (multipass structure history), `NCBI_API_KEY` / `NCBI_EMAIL` (PubMed rate limits).
+
+## Multipass Method
+
+`cmsbot generate "<brief>" --type blog --method multipass [--no-pubmed] [--no-images]`
+
+Implements the multipass-writing method: structure is what gives AI text away, rewording doesn't change it,
+and the shape is set at planning time. Stages:
+
+1. **Material** - PubMed search for the brief, then sourced material and `[bracket]` gaps (never invented specifics)
+2. **Plan** - explicit structural decisions and a rarity check, steered away from recent pieces (variety ledger)
+3. **Draft** - written unit by unit from the plan, citing studies inline
+4. **Structure** - audit of the AI-leaning structural features; fixes cut, move or replace units (max 2 rounds)
+5. **Surface** - `shape_check` metrics plus de-AI heuristics; hard patterns get one plain-statement fix
+6. **Fit** - claims extracted and every PMID/DOI verified; remaining gaps listed for the reviewer
+
+Outputs in `source/`: `content.md`, `index.html`, `material.json`, `plan.json`, `audit.json`, `claims.json`,
+`gaps.json`. Measure any draft with `python -m cmsbot.multipass.shape_check draft.md`.
 
 ## Repo Layout
 

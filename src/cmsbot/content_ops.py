@@ -180,6 +180,12 @@ def write_asset_manifest(
         ("content_markdown", source_root / "content.md"),
         ("content_html", source_root / "index.html"),
         ("images_dir", source_root / "images"),
+        # multipass review artifacts
+        ("material", source_root / "material.json"),
+        ("plan", source_root / "plan.json"),
+        ("claims", source_root / "claims.json"),
+        ("gaps", source_root / "gaps.json"),
+        ("audit", source_root / "audit.json"),
     ):
         if rel_path.exists():
             source_artifacts[name] = str(rel_path.relative_to(root))
