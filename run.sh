@@ -37,7 +37,7 @@ case "${1:-help}" in
     "$BOOTSTRAP_SCRIPT"
     ;;
 
-  generate|check|styles|models|topics|project|export-blog-draft|screenshots)
+  generate|check|styles|models|topics|project|export-blog-draft|export-thread|export-carousel|export-video-script|screenshots|calendar|review|goal|analytics|routing)
     run_cmsbot "$@"
     ;;
 
@@ -118,6 +118,8 @@ Commands:
   ./run.sh project <init|context|voice> [args...]
   ./run.sh topics [args...]
   ./run.sh export-blog-draft <output_dir> [args...]
+  ./run.sh export-thread|export-carousel|export-video-script [args...]
+  ./run.sh calendar|review|goal|analytics|routing <subcommand> [args...]
   ./run.sh screenshots <describe|list|validate|add> [args...]
   ./run.sh seo <research|autocomplete|reddit|competitors|evaluate|evaluate:gsc|evaluate:ga4|test:connectivity> [args...]
   ./run.sh slideshow <specs|images|postprocess|review|pipeline|track> [args...]

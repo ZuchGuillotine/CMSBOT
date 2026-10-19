@@ -51,22 +51,19 @@ class AutoreasonPipeline:
 
     def _build_agents(self) -> None:
         """Instantiate all agents from config."""
-        roles = self.config.roles
+        cfg = self.config
 
         # Core agents
-        self.author = AuthorAgent(build_provider(roles.author, self.config))
-        self.strawman = StrawmanAgent(build_provider(roles.strawman, self.config))
-        self.rewriter = RewriterAgent(build_provider(roles.rewriter, self.config))
-        self.synthesizer = SynthesizerAgent(build_provider(roles.synthesizer, self.config))
+        self.author = AuthorAgent(build_provider(cfg.provider_for("author"), cfg))
+        self.strawman = StrawmanAgent(build_provider(cfg.provider_for("strawman"), cfg))
+        self.rewriter = RewriterAgent(build_provider(cfg.provider_for("rewriter"), cfg))
+        self.synthesizer = SynthesizerAgent(build_provider(cfg.provider_for("synthesizer"), cfg))
 
-        # Judge panel — 3 diverse providers
-        judge_providers = []
-        for name in roles.judges:
-            judge_providers.append(build_provider(name, self.config))
-        self.judge_panel = JudgePanel(judge_providers)
+        # Judge panel — 3 diverse providers where available
+        self.judge_panel = JudgePanel([build_provider(name, cfg) for name in cfg.judge_providers()])
 
         # Image providers — candidate order reflects current quality preference.
-        director_provider = build_provider(roles.image_director, self.config)
+        director_provider = build_provider(cfg.provider_for("image_director"), cfg)
         raster_image_providers = self._build_raster_image_providers()
         fetch_provider: ImageProvider | None = None
 

@@ -20,15 +20,44 @@ class ProviderConfig:
     base_url: str | None = None
 
 
+# Order used when a role's preferred provider has no API key configured.
+PROVIDER_FALLBACK_ORDER = ("anthropic", "openai", "gemini", "openai_compat", "anthropic_opus")
+
+ROLE_NAMES = (
+    "author", "strawman", "rewriter", "synthesizer", "image_director",
+    "planner", "restructurer", "auditor",
+)
+
+
 @dataclass
 class RoleAssignment:
-    """Which provider + model handles each pipeline role."""
+    """Preferred provider for each pipeline role.
+
+    Each can be overridden with CMSBOT_ROLE_<ROLE> (e.g. CMSBOT_ROLE_AUTHOR=anthropic,
+    CMSBOT_ROLE_JUDGES=anthropic_opus,openai). Unconfigured providers fall back
+    in PROVIDER_FALLBACK_ORDER, so the pipeline runs with any single API key.
+    """
     author: str = "openai_compat"
     strawman: str = "openai_compat"
     rewriter: str = "anthropic"
     synthesizer: str = "openai"
     judges: list[str] = field(default_factory=lambda: ["anthropic_opus", "openai", "gemini"])
     image_director: str = "openai"
+    # Multipass stages: plan with the strongest model, audit with a different
+    # model family than the author so the audit isn't marking its own work.
+    planner: str = "anthropic_opus"
+    restructurer: str = "anthropic"
+    auditor: str = "openai"
+
+    @classmethod
+    def from_env(cls) -> RoleAssignment:
+        roles = cls()
+        for role in ROLE_NAMES:
+            if value := os.getenv(f"CMSBOT_ROLE_{role.upper()}"):
+                setattr(roles, role, value.strip())
+        if value := os.getenv("CMSBOT_ROLE_JUDGES"):
+            roles.judges = [v.strip() for v in value.split(",") if v.strip()]
+        return roles
 
 
 @dataclass
@@ -67,11 +96,11 @@ class Config:
         if key := os.getenv("Anthropic_API_Key") or os.getenv("ANTHROPIC_API_KEY"):
             anthropic = ProviderConfig(
                 api_key=key,
-                model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+                model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5-5"),
             )
             anthropic_opus = ProviderConfig(
                 api_key=key,
-                model="claude-opus-4-6",
+                model=os.getenv("ANTHROPIC_OPUS_MODEL", "claude-opus-5-5"),
             )
 
         openai = None
@@ -115,6 +144,7 @@ class Config:
             unsplash_key=unsplash_key,
             xai_key=xai_key,
             openai_image_model=openai_image_model,
+            roles=RoleAssignment.from_env(),
         )
 
     def get_provider_config(self, name: str) -> ProviderConfig:
@@ -125,6 +155,35 @@ class Config:
                 f"Provider '{name}' not configured. Set the corresponding API key."
             )
         return cfg
+
+    def provider_for(self, role: str) -> str:
+        """Configured provider for a role, falling back when the preferred one has no key."""
+        preferred = getattr(self.roles, role)
+        if getattr(self, preferred, None) is not None:
+            return preferred
+        for name in PROVIDER_FALLBACK_ORDER:
+            if getattr(self, name) is not None:
+                return name
+        raise ValueError(
+            f"No LLM provider configured for role '{role}'. Set at least one of: "
+            "ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENAI_COMPAT_API_KEY"
+        )
+
+    def judge_providers(self) -> list[str]:
+        """Up to three judges, preferring distinct configured providers."""
+        available = self.available_providers()
+        if not available:
+            raise ValueError("No LLM provider configured for the judge panel.")
+        chosen = [name for name in self.roles.judges if name in available]
+        for name in PROVIDER_FALLBACK_ORDER:
+            if len(chosen) >= 3:
+                break
+            if name in available and name not in chosen:
+                chosen.append(name)
+        # With fewer than three providers, repeat them so Borda still has three votes
+        while len(chosen) < 3:
+            chosen.append(chosen[len(chosen) % len(chosen)])
+        return chosen[:3]
 
     def available_providers(self) -> list[str]:
         return [

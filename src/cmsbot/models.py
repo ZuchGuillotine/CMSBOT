@@ -44,7 +44,7 @@ class Critique:
 @dataclass
 class Judgment:
     """A single judge's ranking of candidates."""
-    ranking: list[int]  # Indices into the shuffled candidate list, best-first
+    ranking: list[int] | None  # Shuffled candidate numbers, best-first; None = judge abstained
     judge_id: int
     provider: str = ""
     model: str = ""
