@@ -24,7 +24,7 @@ from cmsbot.de_ai import heuristic_review
 from cmsbot.models import ContentType, Draft, LLMResponse, PipelineResult
 from cmsbot.multipass import prompts
 from cmsbot.multipass.shape_check import hard_flags, measure
-from cmsbot.multipass.sources import Paper, search_pubmed, verify_citation
+from cmsbot.multipass.sources import Paper, SourceError, search_pubmed, verify_citation
 from cmsbot.multipass.variety import append_entry, describe_recent, ledger_path, read_recent
 from cmsbot.providers import build_provider
 from cmsbot.providers.base import LLMProvider
@@ -51,12 +51,21 @@ class MultipassArtifacts:
 
 
 def find_gaps(text: str) -> list[str]:
-    """[Bracketed] placeholders left for a person to fill (markdown links and citations excluded)."""
+    """[Bracketed] placeholders left for a person to fill, one entry per occurrence.
+
+    Short placeholders ("...", "verify") get the words before them so each is findable.
+    Markdown links, citations and bare URLs (a formatting slip, not a gap) are excluded.
+    """
     gaps = []
     for match in _GAP.finditer(text):
-        inner = match.group(1).strip()
+        inner = match.group(1).strip().strip("`").strip()
         if re.match(r"^(PMID|DOI|\d)", inner, flags=re.IGNORECASE):
             continue
+        if re.match(r"^https?://\S+$", inner) and "<" not in inner:
+            continue
+        if len(re.findall(r"[A-Za-z]{2,}", inner)) < 3:
+            before = text[max(0, match.start() - 60):match.start()].replace("`", "").split("\n")[-1].strip()
+            inner = f"{inner} (after: \"...{before[-50:]}\")"
         if inner not in gaps:
             gaps.append(inner)
     return gaps
@@ -116,12 +125,22 @@ class MultipassPipeline:
             return []
         plan = await self._call_json("queries", planner, prompts.QUERIES_SYSTEM, task_prompt, required=["queries"])
         queries = [q for q in plan.get("queries", []) if isinstance(q, str) and q.strip()][:3]
-        results = await asyncio.gather(*(search_pubmed(q, max_results=5) for q in queries))
         papers: dict[str, Paper] = {}
-        for batch in results:
+        errors: list[str] = []
+        for query in queries:  # sequential: NCBI rejects bursts
+            try:
+                batch = await search_pubmed(query, max_results=5)
+            except SourceError as exc:
+                errors.append(str(exc))
+                self._log(f"  [sources] '{query}': {exc}")
+                continue
             for paper in batch:
                 papers.setdefault(paper.pmid, paper)
-        self._log(f"  [sources] {len(papers)} PubMed papers from {len(queries)} queries")
+        self._log(f"  [sources] {len(papers)} PubMed papers from {len(queries)} queries: {'; '.join(queries)}")
+        if not papers:
+            # A draft without sources can't cite anything; stop before spending on drafting
+            reason = f"PubMed errors: {'; '.join(errors)}" if errors else "the searches returned no papers"
+            raise SourceError(f"No sources found ({reason}). Retry later, refine the brief, or pass --no-pubmed.")
         return list(papers.values())[:MAX_PAPERS]
 
     async def _structure_pass(self, task_prompt: str, material_json: str, draft: str, artifacts: MultipassArtifacts) -> str:
@@ -172,7 +191,10 @@ class MultipassPipeline:
             "claims", self._provider("auditor"), prompts.CLAIMS_SYSTEM, f"PIECE:\n\n{draft}", required=["claims"]
         )
         claims = [c for c in extracted.get("claims", []) if isinstance(c, dict) and c.get("text")]
-        checks = await asyncio.gather(*(verify_citation(c.get("citation")) for c in claims))
+        # Many claims cite the same paper; look each citation up once
+        unique = list(dict.fromkeys(c.get("citation") for c in claims))
+        results = dict(zip(unique, await asyncio.gather(*(verify_citation(cit) for cit in unique))))
+        checks = [results[c.get("citation")] for c in claims]
         artifacts.claims = [{**c, "verification": v} for c, v in zip(claims, checks)]
         artifacts.gaps = find_gaps(draft)
         unverified = sum(1 for c in artifacts.claims if c["verification"]["status"] != "verified")
@@ -190,7 +212,7 @@ class MultipassPipeline:
         output_dir = output_dir or self.config.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         artifacts = MultipassArtifacts()
-        planner, author = self._provider("planner"), self._provider("author")
+        planner, author = self._provider("planner"), self._provider("drafter")
 
         self._log("\n[1/6 Material] Gathering sources and specifics...")
         papers = await self._gather_papers(planner, task_prompt)

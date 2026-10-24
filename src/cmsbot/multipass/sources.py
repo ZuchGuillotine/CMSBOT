@@ -7,8 +7,10 @@ before a piece reaches review. Set NCBI_API_KEY for higher rate limits.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 
@@ -36,6 +38,52 @@ class Paper:
 
     def as_dict(self) -> dict:
         return {**asdict(self), "url": self.url}
+
+
+class SourceError(RuntimeError):
+    """A source lookup failed after retries."""
+
+
+# NCBI allows 3 requests/second without an API key (10 with one) and answers
+# bursts with HTTP 500 "Search Backend failed", so every E-utilities call goes
+# through one throttled, retrying gate.
+_ncbi_locks: dict[int, asyncio.Lock] = {}
+_ncbi_last = 0.0
+_RETRIES = 3
+
+
+def _ncbi_lock() -> asyncio.Lock:
+    # One lock per event loop: a lock created under one asyncio.run() can't be used under another
+    loop_id = id(asyncio.get_running_loop())
+    return _ncbi_locks.setdefault(loop_id, asyncio.Lock())
+
+
+def _ncbi_interval() -> float:
+    return 0.12 if os.getenv("NCBI_API_KEY") else 0.4
+
+
+async def _ncbi_get(client: httpx.AsyncClient, path: str, params: dict[str, str]) -> httpx.Response:
+    global _ncbi_last
+    last_error = "no response"
+    for attempt in range(_RETRIES):
+        async with _ncbi_lock():
+            wait = _ncbi_interval() - (time.monotonic() - _ncbi_last)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                resp = await client.get(f"{EUTILS}/{path}", params=params)
+            except httpx.HTTPError as exc:
+                resp, last_error = None, str(exc)
+            _ncbi_last = time.monotonic()
+        if resp is not None:
+            backend_error = resp.status_code == 200 and '"ERROR"' in resp.text[:400]
+            if resp.status_code == 200 and not backend_error:
+                return resp
+            last_error = f"HTTP {resp.status_code}" + (" (backend error)" if backend_error else "")
+            if resp.status_code not in (429, 500, 502, 503, 504) and not backend_error:
+                break
+        await asyncio.sleep(1.5 * (attempt + 1))
+    raise SourceError(f"NCBI {path} failed: {last_error}")
 
 
 def _params(**extra: str) -> dict[str, str]:
@@ -77,25 +125,21 @@ def parse_pubmed_xml(xml_text: str, *, abstract_chars: int = 1500) -> list[Paper
 
 
 async def search_pubmed(query: str, *, max_results: int = 6, client: httpx.AsyncClient | None = None) -> list[Paper]:
-    """Top PubMed results for a query, with abstracts. Returns [] on network errors."""
+    """Top PubMed results for a query, with abstracts. Raises SourceError when PubMed can't be reached."""
     own = client is None
     client = client or httpx.AsyncClient(timeout=_TIMEOUT)
     try:
-        search = await client.get(
-            f"{EUTILS}/esearch.fcgi",
-            params=_params(db="pubmed", term=query, retmode="json", retmax=str(max_results), sort="relevance"),
+        search = await _ncbi_get(
+            client, "esearch.fcgi",
+            _params(db="pubmed", term=query, retmode="json", retmax=str(max_results), sort="relevance"),
         )
-        search.raise_for_status()
         ids = search.json().get("esearchresult", {}).get("idlist", [])
         if not ids:
             return []
-        fetch = await client.get(
-            f"{EUTILS}/efetch.fcgi", params=_params(db="pubmed", id=",".join(ids), retmode="xml")
-        )
-        fetch.raise_for_status()
+        fetch = await _ncbi_get(client, "efetch.fcgi", _params(db="pubmed", id=",".join(ids), retmode="xml"))
         return parse_pubmed_xml(fetch.text)
-    except (httpx.HTTPError, ET.ParseError, ValueError):
-        return []
+    except (ET.ParseError, ValueError) as exc:
+        raise SourceError(f"PubMed returned an unreadable response: {exc}") from exc
     finally:
         if own:
             await client.aclose()
@@ -124,8 +168,7 @@ async def verify_citation(citation: str | None, *, client: httpx.AsyncClient | N
     client = client or httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True)
     try:
         if kind == "pmid":
-            resp = await client.get(f"{EUTILS}/esummary.fcgi", params=_params(db="pubmed", id=value, retmode="json"))
-            resp.raise_for_status()
+            resp = await _ncbi_get(client, "esummary.fcgi", _params(db="pubmed", id=value, retmode="json"))
             record = resp.json().get("result", {}).get(value)
             if record and not record.get("error"):
                 return {"status": "verified", "pmid": value, "title": record.get("title", ""),
@@ -137,7 +180,7 @@ async def verify_citation(citation: str | None, *, client: httpx.AsyncClient | N
         resp.raise_for_status()
         titles = resp.json().get("message", {}).get("title") or [""]
         return {"status": "verified", "doi": value, "title": titles[0], "url": f"https://doi.org/{value}"}
-    except (httpx.HTTPError, ValueError) as exc:
+    except (httpx.HTTPError, ValueError, SourceError) as exc:
         return {"status": "error", "reason": f"Lookup failed: {exc}"}
     finally:
         if own:

@@ -242,3 +242,61 @@ def test_multipass_plan_sees_recent_pieces(tmp_path, monkeypatch):
     asyncio.run(MultipassPipeline(config, use_pubmed=False, images=False).run("brief", tmp_path / "s", ledger_dir=tmp_path))
 
     assert 'opening=the false default' in seen["plan_input"]
+
+
+# ---- fixes from the first live run (2026-10-23) --------------------------------
+
+
+def test_ncbi_retries_backend_errors(monkeypatch):
+    from cmsbot.multipass import sources
+
+    monkeypatch.setattr(sources, "_ncbi_interval", lambda: 0.0)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(sources.asyncio, "sleep", no_sleep)
+    calls = {"esearch": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "esearch" in request.url.path:
+            calls["esearch"] += 1
+            if calls["esearch"] == 1:
+                return httpx.Response(500, text="Search Backend failed")
+            if calls["esearch"] == 2:
+                return httpx.Response(200, json={"esearchresult": {"ERROR": "Search Backend failed"}})
+            return httpx.Response(200, json={"esearchresult": {"idlist": ["31234567"]}})
+        return httpx.Response(200, text=PUBMED_XML)
+
+    async def run():
+        async with _client(handler) as client:
+            return await sources.search_pubmed("magnesium sleep", client=client)
+
+    papers = asyncio.run(run())
+    assert calls["esearch"] == 3
+    assert papers[0].pmid == "31234567"
+
+
+def test_multipass_stops_when_no_sources(tmp_path, monkeypatch):
+    import pytest
+
+    stub = ScriptedProvider()
+    monkeypatch.setattr(mp, "build_provider", lambda name, config: stub)
+
+    async def failing_search(query, max_results=5):
+        raise mp.SourceError("NCBI esearch.fcgi failed: HTTP 500")
+
+    monkeypatch.setattr(mp, "search_pubmed", failing_search)
+    config = Config(anthropic=ProviderConfig(api_key="k", model="claude-sonnet-5-5"))
+    with pytest.raises(mp.SourceError, match="No sources found"):
+        asyncio.run(MultipassPipeline(config, images=False).run("brief", tmp_path / "s", ledger_dir=tmp_path))
+    # Nothing beyond the query plan was spent
+    assert stub.calls == ["queries"]
+
+
+def test_find_gaps_gives_short_placeholders_context_and_skips_bare_urls():
+    text = "Doses ranged from `[...]` to `[...]` mg. See [https://apps.apple.com/app/id1]. Guide at [https://x.com/blog/<slug>]."
+    gaps = find_gaps(text)
+    assert len(gaps) == 3
+    assert gaps[0].startswith('... (after: "...Doses ranged from")')
+    assert gaps[2] == "https://x.com/blog/<slug>"

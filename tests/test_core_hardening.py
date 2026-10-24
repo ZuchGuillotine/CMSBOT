@@ -22,7 +22,7 @@ def _cfg(**providers: str) -> Config:
 
 def test_roles_fall_back_to_any_configured_provider():
     config = _cfg(anthropic="claude-sonnet-5-5")
-    for role in ("author", "strawman", "rewriter", "synthesizer", "planner", "auditor"):
+    for role in ("author", "strawman", "rewriter", "synthesizer", "planner", "drafter", "auditor"):
         assert config.provider_for(role) == "anthropic"
     assert config.judge_providers() == ["anthropic", "anthropic", "anthropic"]
 
@@ -30,7 +30,8 @@ def test_roles_fall_back_to_any_configured_provider():
 def test_roles_keep_preferred_provider_when_configured():
     config = _cfg(anthropic="s", anthropic_opus="o", openai="g", gemini="m")
     assert config.provider_for("planner") == "anthropic_opus"
-    assert config.provider_for("auditor") == "openai"
+    assert config.provider_for("drafter") == "anthropic_opus"
+    assert config.provider_for("auditor") == "anthropic"
     assert config.judge_providers() == ["anthropic_opus", "openai", "gemini"]
 
 

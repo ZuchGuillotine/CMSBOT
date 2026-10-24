@@ -25,7 +25,7 @@ PROVIDER_FALLBACK_ORDER = ("anthropic", "openai", "gemini", "openai_compat", "an
 
 ROLE_NAMES = (
     "author", "strawman", "rewriter", "synthesizer", "image_director",
-    "planner", "restructurer", "auditor",
+    "planner", "drafter", "restructurer", "auditor",
 )
 
 
@@ -43,11 +43,13 @@ class RoleAssignment:
     synthesizer: str = "openai"
     judges: list[str] = field(default_factory=lambda: ["anthropic_opus", "openai", "gemini"])
     image_director: str = "openai"
-    # Multipass stages: plan with the strongest model, audit with a different
-    # model family than the author so the audit isn't marking its own work.
+    # Multipass stages. The first test run (2026-10-23) showed a small auditor
+    # model "keeping" the strongest AI tells and a cheap drafter writing choppy
+    # fragments, so plan and draft run on Opus and the audit on Sonnet.
     planner: str = "anthropic_opus"
+    drafter: str = "anthropic_opus"
     restructurer: str = "anthropic"
-    auditor: str = "openai"
+    auditor: str = "anthropic"
 
     @classmethod
     def from_env(cls) -> RoleAssignment:

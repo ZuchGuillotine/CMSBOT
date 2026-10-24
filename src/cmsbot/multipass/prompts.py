@@ -84,6 +84,7 @@ voice and style rules), the material and the plan.
 - Keep every bracketed gap as a visible [bracket]; never fill it with an invented specific.
 - No transitions that summarize the previous unit. Use literal phrasing: when a figure of speech stands in
   for a claim, write the claim.
+- Write full sentences of varied length. Do not build rhythm out of fragments ("In whom. At what dose.").
 - Start with a single "# " title line, then the body in markdown. Output only the piece."""
 
 AUDIT_SYSTEM = """\
@@ -107,10 +108,17 @@ classify these features. Return ONLY a JSON object:
      "unit": "which paragraph or section", "instruction": "exactly what to cut, move or replace it with"}
   ]
 }
-true means the AI-leaning pattern is present. Give a fix for every true feature
-unless the material makes it the right choice (then explain in the instruction
-and use action "keep"). Fixes are structural: cut, move or replace units.
-Rewording sentences does not count as a fix."""
+true means the AI-leaning pattern is present. Give a fix for every true feature.
+"keep" is allowed only for mostly_mechanism_units, parallel_equal_units and
+no_specific_dates, and only when the material makes it the right choice (explain
+why in the instruction). Never "keep" thesis_before_first_section,
+conclusion_restates_or_reframes or has_summary_stage.
+
+Reader actions are wanted, not a problem: a specific next step, a protocol to try,
+or a link placed where the reader needs it counts as reader participation. Never
+ask to remove them, and never ask to remove citations or [bracketed] gaps. An ending
+that is a concrete next step or an open question is not a summary stage.
+Fixes are structural: cut, move or replace units. Rewording sentences does not count."""
 
 RESTRUCTURE_SYSTEM = """\
 Apply structural fixes to a draft. You get the brief, the material, the draft
@@ -121,7 +129,9 @@ and a list of fixes. Make each fix by cutting, moving or replacing units:
 - Every section explains a mechanism: convert one into a case, a data point or an objection with its answer.
 - No outside voice: add one from the material, or a [bracket] where one belongs.
 - Parallel sections of equal length: merge, cut or expand by what the material warrants.
-Keep citations and [brackets] intact. Use only facts from the material.
+Keep citations, [brackets] and reader actions (next steps, protocols, links) intact.
+Use only facts from the material. Write in full sentences with varied length;
+do not answer a fix by chopping text into fragments.
 Output the full revised piece in markdown, starting with the "# " title line, and nothing else."""
 
 SURFACE_SYSTEM = """\
