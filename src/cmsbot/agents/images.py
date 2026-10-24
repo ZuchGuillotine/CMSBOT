@@ -264,33 +264,39 @@ What visuals does this content need? Output a JSON array."""
                     spec.file_path = ""
                 continue
 
-            try:
-                filename = f"{spec.placement}.jpg"
-                output_path = images_dir / filename
-                image_bytes = await self._resolve_raster_bytes(
-                    spec,
-                    log,
-                    variant_index=generated_slot_index,
-                )
-                if image_bytes is None:
-                    log(f"  [SKIP] {spec.placement}: no acceptable raster candidate")
-                    continue
-
-                from cmsbot.postprocess import postprocess_blog_image_bytes
-
-                postprocess_blog_image_bytes(
-                    image_bytes,
-                    output_path,
-                    placement=spec.placement,
-                )
-                spec.file_path = f"images/{filename}"
+            if await self._render_raster(spec, images_dir, log, generated_slot_index):
                 generated_specs.append(spec)
                 generated_slot_index += 1
-            except Exception as exc:
-                log(f"  [WARN] Image generation failed for {spec.placement}: {exc}")
-                spec.file_path = ""
+
+        # A blog needs a hero for its thumbnail and social cards. When the planned one was
+        # skipped (text-heavy concept) or never planned, fall back to a plain photograph.
+        if content_type == ContentType.BLOG and not any(s.placement == "hero" for s in generated_specs):
+            hero = _fallback_hero_spec(final_content)
+            if self.budget.can_afford(self._estimate_slot_cost(hero)):
+                log("  hero: none planned or usable; generating a fallback photograph")
+                if await self._render_raster(hero, images_dir, log, generated_slot_index):
+                    generated_specs.insert(0, hero)
 
         return generated_specs, responses
+
+    async def _render_raster(self, spec: ImageSpec, images_dir: Path, log, variant_index: int) -> bool:
+        """Generate, judge and post-process one raster slot; sets spec.file_path on success."""
+        try:
+            filename = f"{spec.placement}.jpg"
+            image_bytes = await self._resolve_raster_bytes(spec, log, variant_index=variant_index)
+            if image_bytes is None:
+                log(f"  [SKIP] {spec.placement}: no acceptable raster candidate")
+                return False
+
+            from cmsbot.postprocess import postprocess_blog_image_bytes
+
+            postprocess_blog_image_bytes(image_bytes, images_dir / filename, placement=spec.placement)
+            spec.file_path = f"images/{filename}"
+            return True
+        except Exception as exc:
+            log(f"  [WARN] Image generation failed for {spec.placement}: {exc}")
+            spec.file_path = ""
+            return False
 
     def _estimate_slot_cost(self, spec: ImageSpec) -> float:
         """Estimate the cost of generating a single visual."""
@@ -442,6 +448,23 @@ def _parse_image_specs(text: str) -> list[ImageSpec]:
             method="generate",
         )
     ]
+
+
+def _fallback_hero_spec(final_content: str) -> ImageSpec:
+    """A photographic hero that doesn't depend on rendering words, built from the article title."""
+    title_match = re.search(r"^#\s+(.+)$", final_content, re.MULTILINE)
+    topic = title_match.group(1).strip() if title_match else "the article's subject"
+    return ImageSpec(
+        description=(
+            f"Candid editorial photograph of an everyday scene that fits an article titled \"{topic}\": "
+            "a real home or daily-routine setting with natural light. No visible text, labels, packaging, "
+            "screens, charts or signage."
+        ),
+        alt_text=f"Photo for {topic}",
+        placement="hero",
+        method="generate",
+        search_query=topic,
+    )
 
 
 def _apply_text_risk_guard(

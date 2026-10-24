@@ -355,10 +355,11 @@ async def test_fetch_method_uses_unsplash_only_and_skips_judge(fake_postprocess,
         output_dir=tmp_path,
     )
 
-    assert [image.file_path for image in images] == ["images/section-1.jpg"]
+    # The fetched section skips the judge; only the fallback hero goes through raster + judge
+    assert [image.file_path for image in images] == ["images/hero.jpg", "images/section-1.jpg"]
     assert len(fetch_provider.calls) == 1
-    assert len(raster_provider.calls) == 0
-    assert judge.calls == 0
+    assert len(raster_provider.calls) == 1
+    assert judge.calls == 1
     assert (tmp_path / "images" / "section-1.jpg").read_bytes() == b"real-photo"
 
 
@@ -412,9 +413,10 @@ async def test_generate_method_respects_judge_disqualification(fake_postprocess,
         output_dir=tmp_path,
     )
 
+    # The planned slot and the fallback hero are both disqualified
     assert images == []
-    assert judge.calls == 1
-    assert all(len(provider.calls) == 1 for provider in raster_providers)
+    assert judge.calls == 2
+    assert all(len(provider.calls) == 2 for provider in raster_providers)
 
 
 @pytest.mark.asyncio
@@ -529,10 +531,10 @@ async def test_diagram_method_writes_svg_and_skips_raster_path(tmp_path):
         output_dir=tmp_path,
     )
 
-    assert [image.file_path for image in images] == ["images/section-1.svg"]
+    assert [image.file_path for image in images] == ["images/hero.jpg", "images/section-1.svg"]
     assert len(fetch_provider.calls) == 0
-    assert len(raster_provider.calls) == 0
-    assert judge.calls == 0
+    assert len(raster_provider.calls) == 1  # fallback hero only
+    assert judge.calls == 1
     assert len(responses) == 2
     assert (tmp_path / "images" / "section-1.svg").read_text(encoding="utf-8").startswith("<svg")
 
@@ -567,3 +569,35 @@ def test_renderer_keeps_hero_meta_raster_and_section_svg():
     assert 'property="og:image" content="images/hero.jpg"' in html
     assert 'src="images/hero.jpg"' in html
     assert 'src="images/section-1.svg"' in html
+
+
+@pytest.mark.asyncio
+async def test_text_heavy_hero_is_replaced_by_fallback_photo(fake_postprocess, tmp_path):
+    director_provider = StubLLMProvider(
+        [json.dumps([{"description": "A comparison chart of three magnesium forms", "alt_text": "Chart",
+                      "placement": "hero", "method": "generate"}])],
+        name="director",
+    )
+    raster_provider = StubImageProvider("grok", image_bytes=b"photo")
+    judge = StubJudge(
+        ImageJudgment(winner_index=0, reasoning="ok", scores=[8], assessments=[_make_assessment()],
+                      provider="judge", model="judge-model")
+    )
+    director = ImageDirector(
+        director_provider=director_provider,
+        raster_image_providers=[raster_provider],
+        fetch_provider=None,
+        judge=judge,
+        budget=BudgetTracker(cap=10.0),
+    )
+
+    images, _ = await director.generate_images(
+        task_prompt="Magnesium forms",
+        final_content="# Magnesium Glycinate vs Oxide\n\nBody.",
+        content_type=ContentType.BLOG,
+        output_dir=tmp_path,
+    )
+
+    assert [(i.placement, i.file_path) for i in images] == [("hero", "images/hero.jpg")]
+    assert "Magnesium Glycinate vs Oxide" in images[0].description
+    assert "No visible text" in images[0].description
