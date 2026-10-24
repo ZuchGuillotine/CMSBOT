@@ -202,7 +202,8 @@ a single study read closely, a reader objection with its answer, a common belief
 contradicts, a how-to-track protocol, a limitation people skip. 3-7 posts per thread.
 - Each post is under 270 characters, no hashtags, no emoji bullets, no "1/" numbering.
 - The first post carries the specific finding or question; it is not a teaser.
-- Cite with the study URL in the post that makes the claim (counts as ~23 characters).
+- Put each study's URL once, in the first post that uses it (counts as ~23 characters); later posts
+  about the same study don't repeat it.
 - At most one thread in the batch may mention the product, plainly and once.
 
 {_DERIVE_RULES}"""
@@ -226,6 +227,7 @@ app screen recordings and template-rendered text. Return ONLY a JSON object:
 Write the number of scripts requested. Each video carries ONE primary ledger claim (first in
 claim_ids) and at most two supporting ones; use a different primary claim per video.
 - 3-5 beats, 30-75 seconds of narration at about 2.5 words per second. Vary length across the batch.
+- The hook is spoken first and the ending last; beats carry the middle and never repeat either line.
 - Narration is written to be spoken by a person: short clauses, no parentheses, no citations read aloud.
 - Every number, dose and unit spoken also appears in overlay_text, so it can be template-rendered.
 - No realistic AI people or AI presenters in "visual"; no weight-loss framing.
