@@ -147,3 +147,95 @@ Return ONLY a JSON object:
 Include every number, dose, study finding, biomarker threshold and causal claim.
 Use the citation the piece gives at that point, or null if it gives none.
 Do not include opinions, instructions without factual content, or [bracketed] gaps."""
+
+
+# ---- Light run: derivatives of an anchor piece (`cmsbot derive`) -------------
+
+_DERIVE_RULES = """\
+Rules for every derivative:
+- State only facts from the CLAIM LEDGER. Tag each item with the ledger ids it states ("claim_ids").
+  Every number, dose, duration and study finding must come from a ledger claim, worded so it still
+  says what the claim says. If a point needs a fact the ledger lacks, leave a visible [bracket]
+  describing what is missing instead of supplying it.
+- Never invent anecdotes, testimonials, quotes, people, or first-person experiences ("I tried",
+  "my clients"). The account speaks as a team that reads the research, not as a user.
+- Structure/function language only: no claims that anything treats, cures or prevents a disease.
+- No roadmap openers ("in this thread", "here's what"), no summary or restated thesis at the end,
+  no "it's not X, it's Y" frames, no "whether you're..." reader flattery. Follow the style rules in
+  the brief (they may ban em dashes).
+- Successive items in one batch must differ in opening move and in which claims carry them."""
+
+NEWSLETTER_SYSTEM = f"""\
+You write the weekly research newsletter from an anchor article and its claim ledger.
+Return ONLY a JSON object:
+{{"items": [{{
+  "subject": "under 60 characters, specific, no clickbait or ALL CAPS",
+  "preheader": "under 110 characters, adds to the subject instead of repeating it",
+  "title": "headline at the top of the email",
+  "body_markdown": "the email body in markdown",
+  "claim_ids": ["L1", "L3"]
+}}]}}
+
+The reader opted in for research updates and already supplements. 350-600 words.
+- Open on the most useful finding from the ledger, with its number and source, not on a greeting
+  about the week.
+- Cover the anchor's research in your own order; do not paraphrase the article top to bottom.
+- If a FOCUS AREA is given, connect the finding to it in one short section, using only ledger facts.
+- Give the reader one thing to do or track this week.
+- Link to the full article exactly once with a markdown link whose URL is {{{{anchor_url}}}}
+  (keep those braces literally). Cite studies inline as markdown links to their URL.
+- No sign-off cliches ("Stay healthy!"). End on the action or the open question.
+
+{_DERIVE_RULES}"""
+
+THREAD_SYSTEM = f"""\
+You write X (Twitter) threads from an anchor article and its claim ledger.
+Return ONLY a JSON object:
+{{"items": [{{
+  "angle": "one line: what this thread is about, for the reviewer",
+  "posts": ["post 1", "post 2"],
+  "claim_ids": ["L2"]
+}}]}}
+
+Write the number of threads requested, each a standalone thread on a different angle:
+a single study read closely, a reader objection with its answer, a common belief the ledger
+contradicts, a how-to-track protocol, a limitation people skip. 3-7 posts per thread.
+- Each post is under 270 characters, no hashtags, no emoji bullets, no "1/" numbering.
+- The first post carries the specific finding or question; it is not a teaser.
+- Cite with the study URL in the post that makes the claim (counts as ~23 characters).
+- At most one thread in the batch may mention the product, plainly and once.
+
+{_DERIVE_RULES}"""
+
+VIDEO_SCRIPT_SYSTEM = f"""\
+You write short-form video scripts (TikTok/Reels/Shorts) from an anchor article and its claim
+ledger. A team member records the voiceover; visuals are b-roll, the paper itself on screen,
+app screen recordings and template-rendered text. Return ONLY a JSON object:
+{{"items": [{{
+  "title": "working title for the reviewer",
+  "format": "study receipt | form-vs-form | marker explainer | myth check",
+  "hook": "the first spoken line, under 2 seconds, states the finding or the question",
+  "on_screen_source": "the citation shown on screen (journal, year, PMID)",
+  "beats": [{{"narration": "spoken words", "visual": "what is on screen", "overlay_text": "max 8 words"}}],
+  "ending": "the last spoken line: a consequence, an open question or one next step, never a recap",
+  "caption": "post caption, under 150 characters, searchable words that are actually spoken",
+  "target_duration_seconds": 45,
+  "claim_ids": ["L4"]
+}}]}}
+
+Write the number of scripts requested. Each video carries ONE primary ledger claim (first in
+claim_ids) and at most two supporting ones; use a different primary claim per video.
+- 3-5 beats, 30-75 seconds of narration at about 2.5 words per second. Vary length across the batch.
+- Narration is written to be spoken by a person: short clauses, no parentheses, no citations read aloud.
+- Every number, dose and unit spoken also appears in overlay_text, so it can be template-rendered.
+- No realistic AI people or AI presenters in "visual"; no weight-loss framing.
+
+{_DERIVE_RULES}"""
+
+DERIVE_FIX_SYSTEM = """\
+Fix the listed problems in one derivative item. You get the claim ledger, the item as JSON and the
+problems. Unsupported figures: remove the sentence or restate it using the ledger claim it was
+meant to reflect; never keep a figure the ledger lacks. Invented anecdotes or testimonials: cut
+them. Surface patterns: replace with a plain statement, not a synonym in the same frame.
+Change only what the problems require. Return ONLY the corrected item as a JSON object with the
+same keys."""

@@ -330,6 +330,92 @@ def generate(
             console.print(f"  [yellow][{gap}][/yellow]")
 
 
+@main.command()
+@click.argument("asset_set_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--kind", "kinds", multiple=True, required=True,
+              type=click.Choice(["newsletter", "thread", "video_script"]),
+              help="Derivative kind; repeat for several (e.g. --kind newsletter --kind thread).")
+@click.option("--count", type=int, default=None,
+              help="Items per kind (defaults: newsletter 1, thread 5, video_script 3).")
+@click.option("--focus", default=None, help="newsletter: this week's focus area (e.g. 'sleep and recovery').")
+@click.option("--claims-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None,
+              help="Claim ledger JSON ({\"claims\": [...]}); default: the anchor's source/claims.json.")
+@click.option("--include-unverified", is_flag=True, default=False,
+              help="Also use cited claims whose citation wasn't verified.")
+@click.option("--anchor-url", default=None,
+              help="Public URL of the anchor article; newsletters keep {{anchor_url}} when omitted.")
+@click.option("--context-file", "-c", type=click.Path(exists=True), default=None)
+@click.option("--project-file", "-p", type=click.Path(exists=True), default=None)
+@click.option("--style", "-s", default=None)
+@click.option("--env-file", type=click.Path(exists=True), default=None)
+@click.option("--budget", type=float, default=None, help="Budget cap in USD per kind.")
+def derive(
+    asset_set_dir: Path,
+    kinds: tuple[str, ...],
+    count: int | None,
+    focus: str | None,
+    claims_file: Path | None,
+    include_unverified: bool,
+    anchor_url: str | None,
+    context_file: str | None,
+    project_file: str | None,
+    style: str | None,
+    env_file: str | None,
+    budget: float | None,
+):
+    """Write newsletter, thread and video-script derivatives of an anchor piece (multipass light run).
+
+    Derivatives may only restate claims from the anchor's claim ledger. Output goes to
+    <asset-set>/distribution/derivatives/<kind>.json.
+    """
+    from cmsbot.content_ops import resolve_asset_set_root
+    from cmsbot.multipass.derive import ANCHOR_URL_TOKEN, DeriveError, DerivePipeline, load_ledger, write_derivatives
+
+    config = Config.from_env(env_file)
+    if budget is not None:
+        config.budget_cap = budget
+    asset_root = resolve_asset_set_root(asset_set_dir)
+    source_dir = asset_root / "source"
+    content_path = source_dir / "content.md"
+    if not content_path.exists():
+        console.print(f"[red]Error:[/red] No anchor content at {content_path}")
+        sys.exit(1)
+    anchor_text = content_path.read_text(encoding="utf-8").strip()
+    title_line = next((line for line in anchor_text.splitlines() if line.startswith("# ")), "# Untitled")
+    claims_path = claims_file or source_dir / "claims.json"
+    if not claims_path.exists():
+        console.print(f"[red]Error:[/red] No claim ledger at {claims_path}. Run generate --method multipass first, or pass --claims-file.")
+        sys.exit(1)
+    claims = json.loads(claims_path.read_text(encoding="utf-8")).get("claims", [])
+    ledger = load_ledger(claims, include_unverified=include_unverified)
+
+    project_context = load_project_profile(project_file).render_context_markdown() if project_file else None
+    brief = build_enriched_prompt(
+        "Write derivatives of the anchor article below for the project's channels.",
+        context=combine_context_text(project_context, load_context_file(context_file) if context_file else None),
+        style=load_style(style) if style else None,
+    )
+
+    console.print(f"[bold]Derive[/bold] {', '.join(kinds)} from {asset_root.name} ({len(ledger)} of {len(claims)} claims usable)")
+    for kind in kinds:
+        pipeline = DerivePipeline(config)
+        pipeline.set_logger(lambda msg: console.print(msg))
+        try:
+            payload = asyncio.run(pipeline.run(
+                kind, brief=brief, anchor_title=title_line[2:].strip(), anchor_text=anchor_text,
+                ledger=ledger, count=count, focus=focus, anchor_url=anchor_url or ANCHOR_URL_TOKEN,
+            ))
+        except DeriveError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
+        path = write_derivatives(asset_root, payload)
+        console.print(f"[green]Wrote[/green] {path}")
+        for i, item in enumerate(payload["items"], 1):
+            notes = item["audit"]["remaining"] + [f"[{g}]" for g in item["gaps"]]
+            if notes:
+                console.print(f"  item {i}: " + "; ".join(notes[:5]))
+
+
 @main.command("export-blog-draft")
 @click.argument("output_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--category", default=None, help="Optional category for the exported draft.")

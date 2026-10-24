@@ -37,7 +37,7 @@ case "${1:-help}" in
     "$BOOTSTRAP_SCRIPT"
     ;;
 
-  generate|check|styles|models|topics|project|export-blog-draft|export-thread|export-carousel|export-video-script|screenshots|calendar|review|goal|analytics|routing)
+  generate|derive|check|styles|models|topics|project|export-blog-draft|export-thread|export-carousel|export-video-script|screenshots|calendar|review|goal|analytics|routing)
     run_cmsbot "$@"
     ;;
 
