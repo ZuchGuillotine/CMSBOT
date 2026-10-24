@@ -456,6 +456,23 @@ and the shape is set at planning time. Stages:
 Outputs in `source/`: `content.md`, `index.html`, `material.json`, `plan.json`, `audit.json`, `claims.json`,
 `gaps.json`. Measure any draft with `python -m cmsbot.multipass.shape_check draft.md`.
 
+### Derivatives (light run)
+
+`cmsbot derive <asset-set> --kind newsletter|thread|video_script [--count N] [--focus "..."] [--claims-file ledger.json] [--include-unverified] [--anchor-url URL]`
+
+Turns a multipass anchor into a newsletter, X threads or short-video scripts that may only restate the
+anchor's claim ledger (the verified claims in `source/claims.json`, or a `--claims-file` exported from a
+review queue). One drafting call per kind (`drafter` role), then gates on each item:
+
+- **Ledger**: every figure must appear in a ledger claim; every item lists the `claim_ids` it uses
+- **Testimonials**: first-person anecdotes and "my client" stories are flagged
+- **Surface**: `shape_check` hard patterns and de-AI heuristics, measured per platform
+
+Failures get one fix pass (`restructurer` role); whatever remains is recorded in the item's `audit.remaining`
+with any `[gaps]`. Output: `distribution/derivatives/<kind>.json`. Newsletters keep `{{anchor_url}}` for the
+article link unless `--anchor-url` is given, and include `body_html`. Defaults: 1 newsletter, 5 threads, 3 videos.
+Cost is roughly $0.07-0.13 per kind with Opus as drafter.
+
 ## Repo Layout
 
 ```text
