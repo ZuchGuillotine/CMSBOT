@@ -601,3 +601,55 @@ async def test_text_heavy_hero_is_replaced_by_fallback_photo(fake_postprocess, t
     assert [(i.placement, i.file_path) for i in images] == [("hero", "images/hero.jpg")]
     assert "Magnesium Glycinate vs Oxide" in images[0].description
     assert "No visible text" in images[0].description
+
+
+def _section_image(n: int, ext: str = "svg") -> ImageSpec:
+    return ImageSpec(
+        description=f"Section {n}",
+        alt_text=f"Section {n}",
+        placement=f"section-{n}",
+        method="diagram",
+        file_path=f"images/section-{n}.{ext}",
+    )
+
+
+def test_renderer_spreads_section_images_when_draft_has_no_subheadings():
+    pytest.importorskip("jinja2")
+    from cmsbot.renderer import _markdown_to_html
+
+    body = "# Title\n\n" + "\n\n".join(f"Paragraph {i}." for i in range(1, 9))
+    html = _markdown_to_html(body, [_section_image(2), _section_image(1, "jpg"), _section_image(3)])
+
+    positions = [html.index(f'src="images/section-{n}.') for n in (1, 2, 3)]
+    assert positions == sorted(positions)  # kept in section order
+    assert html.index("Paragraph 1.") < positions[0]  # not above the intro
+    assert positions[-1] < html.index("Paragraph 8.")  # not below the close
+
+
+def test_renderer_places_leftovers_after_matched_headings():
+    pytest.importorskip("jinja2")
+    from cmsbot.renderer import _markdown_to_html
+
+    html = _markdown_to_html(
+        "# T\n\n## One\nA.\n\nB.\n\nC.",
+        [_section_image(1), _section_image(2), _section_image(3)],
+    )
+    assert html.count("<figure") == 3
+    assert html.index("<h2>One</h2>") < html.index("section-1.svg") < html.index("<p>A.</p>")
+    assert html.index("section-2.svg") < html.index("section-3.svg")
+
+
+def test_renderer_appends_section_images_when_there_are_no_paragraphs():
+    pytest.importorskip("jinja2")
+    from cmsbot.renderer import _markdown_to_html
+
+    html = _markdown_to_html("# T\n\n- a\n- b", [_section_image(1)])
+    assert html.rstrip().endswith("</figure>")
+
+
+def test_renderer_never_splits_a_lead_in_from_its_list():
+    pytest.importorskip("jinja2")
+    from cmsbot.renderer import _markdown_to_html
+
+    html = _markdown_to_html("# T\n\nIntro.\n\nSteps:\n\n- a\n- b\n\nClose.", [_section_image(1)])
+    assert "<p>Steps:</p>\n<ul>" in html
