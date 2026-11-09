@@ -653,3 +653,12 @@ def test_renderer_never_splits_a_lead_in_from_its_list():
 
     html = _markdown_to_html("# T\n\nIntro.\n\nSteps:\n\n- a\n- b\n\nClose.", [_section_image(1)])
     assert "<p>Steps:</p>\n<ul>" in html
+
+
+def test_sanitize_svg_accepts_title_and_desc():
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50">'
+        "<title>Dose vs level</title><desc>Two boxes</desc>"
+        '<rect x="0" y="0" width="40" height="20"/><text x="5" y="15">Dose</text></svg>'
+    )
+    assert "<title>Dose vs level</title>" in sanitize_svg(svg).replace("ns0:", "")
