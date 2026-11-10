@@ -1,4 +1,4 @@
-"""Light multipass run for derivatives (`cmsbot derive`): newsletter, threads, video scripts.
+"""Light multipass run for derivatives (`cmsbot derive`): newsletter, threads, video scripts, carousels.
 
 Derivatives restate claims from the anchor's claim ledger instead of making new ones, so a
 reviewer checks facts once on the anchor and only tone and format here. Stages:
@@ -53,6 +53,7 @@ KINDS: dict[str, DerivativeKind] = {
     "newsletter": DerivativeKind("newsletter", prompts.NEWSLETTER_SYSTEM, "email", 1, "email"),
     "thread": DerivativeKind("thread", prompts.THREAD_SYSTEM, "x", 5, "x"),
     "video_script": DerivativeKind("video_script", prompts.VIDEO_SCRIPT_SYSTEM, "tiktok", 3, "tiktok"),
+    "carousel": DerivativeKind("carousel", prompts.CAROUSEL_SYSTEM, "instagram", 1, "instagram"),
 }
 
 
@@ -96,11 +97,36 @@ def item_text(kind: str, item: dict[str, Any]) -> str:
         return "\n\n".join(str(item.get(k) or "") for k in ("subject", "preheader", "title", "body_markdown"))
     if kind == "thread":
         return "\n\n".join(str(p) for p in item.get("posts") or [])
+    if kind == "carousel":
+        return "\n\n".join(carousel_texts(item))
     beats = item.get("beats") or []
     spoken = [str(item.get("hook") or "")]
     spoken += [f"{b.get('narration', '')}\n{b.get('overlay_text', '')}" for b in beats if isinstance(b, dict)]
     spoken += [str(item.get("ending") or ""), str(item.get("caption") or "")]
     return "\n\n".join(spoken)
+
+
+def carousel_texts(item: dict[str, Any]) -> list[str]:
+    """Every string a reader sees on a carousel's slides, plus its caption (not the citation footer)."""
+    texts: list[str] = []
+
+    def walk(value: Any, key: str = "") -> None:
+        if key in {"type", "sources", "strength"}:
+            return
+        if isinstance(value, str):
+            if value.strip():
+                texts.append(value.strip())
+        elif isinstance(value, list):
+            for v in value:
+                walk(v)
+        elif isinstance(value, dict):
+            for k, v in value.items():
+                walk(v, k)
+
+    for slide in item.get("slides") or []:
+        walk(slide)
+    walk(item.get("caption") or "")
+    return texts
 
 
 def _numbers(text: str) -> set[str]:
@@ -159,6 +185,22 @@ class DerivePipeline:
                 if attempt:
                     raise
         raise AssertionError("unreachable")
+
+    async def extract_ledger(self, anchor_text: str) -> list[dict[str, Any]]:
+        """A ledger from the anchor's own text, for anchors written before claim ledgers existed.
+
+        These claims were reviewed only as part of the article, not one by one, so every entry is
+        marked source="anchor-text" and the reviewer sees that in the derivative's audit.
+        """
+        self._log("\n[Ledger] extracting claims from the anchor text...")
+        extracted = await self._json("ledger_extract", "auditor", prompts.CLAIMS_SYSTEM, anchor_text, required=["claims"])
+        ledger = []
+        for claim in extracted.get("claims", []):
+            if isinstance(claim, dict) and str(claim.get("text") or "").strip():
+                ledger.append({"id": f"L{len(ledger) + 1}", "text": str(claim["text"]).strip(),
+                               "citation": claim.get("citation"), "url": None, "source": "anchor-text"})
+        self._log(f"  {len(ledger)} claims")
+        return ledger
 
     async def run(
         self,
@@ -225,6 +267,7 @@ class DerivePipeline:
             "anchor": {"title": anchor_title},
             "focus": focus,
             "ledger": ledger,
+            "ledger_source": "anchor-text" if any(c.get("source") == "anchor-text" for c in ledger) else "claims",
             "items": results,
             "cost_usd": round(self.budget.spent, 4),
         }

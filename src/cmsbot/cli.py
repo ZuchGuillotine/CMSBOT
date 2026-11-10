@@ -333,15 +333,17 @@ def generate(
 @main.command()
 @click.argument("asset_set_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--kind", "kinds", multiple=True, required=True,
-              type=click.Choice(["newsletter", "thread", "video_script"]),
+              type=click.Choice(["newsletter", "thread", "video_script", "carousel"]),
               help="Derivative kind; repeat for several (e.g. --kind newsletter --kind thread).")
 @click.option("--count", type=int, default=None,
-              help="Items per kind (defaults: newsletter 1, thread 5, video_script 3).")
+              help="Items per kind (defaults: newsletter 1, thread 5, video_script 3, carousel 1).")
 @click.option("--focus", default=None, help="newsletter: this week's focus area (e.g. 'sleep and recovery').")
 @click.option("--claims-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None,
               help="Claim ledger JSON ({\"claims\": [...]}); default: the anchor's source/claims.json.")
 @click.option("--include-unverified", is_flag=True, default=False,
               help="Also use cited claims whose citation wasn't verified.")
+@click.option("--ledger-from-anchor", is_flag=True, default=False,
+              help="Build the ledger from the anchor's own text (for articles written before claim ledgers).")
 @click.option("--anchor-url", default=None,
               help="Public URL of the anchor article; newsletters keep {{anchor_url}} when omitted.")
 @click.option("--context-file", "-c", type=click.Path(exists=True), default=None)
@@ -356,6 +358,7 @@ def derive(
     focus: str | None,
     claims_file: Path | None,
     include_unverified: bool,
+    ledger_from_anchor: bool,
     anchor_url: str | None,
     context_file: str | None,
     project_file: str | None,
@@ -363,7 +366,7 @@ def derive(
     env_file: str | None,
     budget: float | None,
 ):
-    """Write newsletter, thread and video-script derivatives of an anchor piece (multipass light run).
+    """Write newsletter, thread, video-script and carousel derivatives of an anchor piece (multipass light run).
 
     Derivatives may only restate claims from the anchor's claim ledger. Output goes to
     <asset-set>/distribution/derivatives/<kind>.json.
@@ -383,11 +386,14 @@ def derive(
     anchor_text = content_path.read_text(encoding="utf-8").strip()
     title_line = next((line for line in anchor_text.splitlines() if line.startswith("# ")), "# Untitled")
     claims_path = claims_file or source_dir / "claims.json"
-    if not claims_path.exists():
-        console.print(f"[red]Error:[/red] No claim ledger at {claims_path}. Run generate --method multipass first, or pass --claims-file.")
+    if ledger_from_anchor:
+        claims, ledger = [], []
+    elif not claims_path.exists():
+        console.print(f"[red]Error:[/red] No claim ledger at {claims_path}. Run generate --method multipass first, pass --claims-file, or use --ledger-from-anchor.")
         sys.exit(1)
-    claims = json.loads(claims_path.read_text(encoding="utf-8")).get("claims", [])
-    ledger = load_ledger(claims, include_unverified=include_unverified)
+    else:
+        claims = json.loads(claims_path.read_text(encoding="utf-8")).get("claims", [])
+        ledger = load_ledger(claims, include_unverified=include_unverified)
 
     project_context = load_project_profile(project_file).render_context_markdown() if project_file else None
     brief = build_enriched_prompt(
@@ -396,6 +402,11 @@ def derive(
         style=load_style(style) if style else None,
     )
 
+    if ledger_from_anchor:
+        extractor = DerivePipeline(config)
+        extractor.set_logger(lambda msg: console.print(msg))
+        ledger = asyncio.run(extractor.extract_ledger(anchor_text))
+        claims = ledger
     console.print(f"[bold]Derive[/bold] {', '.join(kinds)} from {asset_root.name} ({len(ledger)} of {len(claims)} claims usable)")
     for kind in kinds:
         pipeline = DerivePipeline(config)

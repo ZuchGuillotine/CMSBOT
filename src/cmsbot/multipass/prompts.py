@@ -252,6 +252,45 @@ claim_ids) and at most two supporting ones; use a different primary claim per vi
 
 {_DERIVE_RULES}"""
 
+CAROUSEL_SYSTEM = f"""\
+You write Instagram carousels from an anchor article and its claim ledger. Slides are rendered from
+structured fields into a designed template, so write the fields, not layout or styling. Return ONLY a
+JSON object:
+{{"items": [{{
+  "title": "working title for the reviewer",
+  "topic_tag": "2-3 words in capitals for the slide header, e.g. OMEGA-3 · MOOD",
+  "eyebrow": "the subject in 2-6 words, e.g. EPA vs DHA · FISH OIL RATIOS",
+  "slides": [
+    {{"type": "cover", "headline": "max 10 words: the finding or the question", "dek": "max 30 words"}},
+    {{"type": "point", "label": "max 3 words", "headline": "max 10 words", "body": "max 40 words",
+      "strength": 2, "strength_note": "max 6 words, e.g. one double-blind RCT"}},
+    {{"type": "mechanism", "label": "max 4 words", "headline": "max 8 words",
+      "nodes": ["2-4 steps, max 4 words each"], "note": "max 30 words"}},
+    {{"type": "evidence", "label": "WHAT THE EVIDENCE SUPPORTS",
+      "rows": [{{"claim": "max 6 words", "strength": 2, "note": "max 10 words: population and design"}}]}},
+    {{"type": "fit", "good_label": "WHAT THE TRIALS STUDIED", "caution_label": "WHAT THEY DIDN'T",
+      "good_fit": [{{"title": "max 5 words", "note": "max 6 words"}}], "cautions": [{{"title": "max 5 words", "note": "max 6 words"}}]}},
+    {{"type": "verdict", "headline": "max 12 words", "body": "max 35 words"}},
+    {{"type": "cta", "headline": "max 8 words", "body": "max 20 words", "button": "a CTA from the brief, max 5 words"}}
+  ],
+  "caption": "post caption under 1,500 characters: the finding, its limits and the study names; no hashtag walls",
+  "sources": "citations for the slide footer, under 90 characters, e.g. PMID 37028202, 26978738",
+  "claim_ids": ["L1", "L3"]
+}}]}}
+
+Write the number of carousels requested, each on a different primary claim.
+- 6-8 slides: "cover" first and "cta" last, with at least one "evidence", "mechanism" or "fit" slide between.
+  Omit "strength" on a point slide when the ledger doesn't describe the study design. Respect the word limits;
+  they are what fits the template.
+- Strength: 3 = several RCTs or a meta-analysis agreeing in that population; 2 = one RCT, or meta-analyses
+  that disagree; 1 = observational, pilot or very small studies; 0 = no trial in the ledger supports it.
+  Judge only from what the ledger says about the studies; when unsure, use the lower value.
+- The fit slide describes who was and wasn't studied, never who should take or avoid something.
+- The verdict says what the evidence shows and where it stops. The cta is a tracking action the brief allows.
+- Each slide must make sense on its own when screenshotted; no "as above" or "next slide".
+
+{_DERIVE_RULES}"""
+
 DERIVE_FIX_SYSTEM = """\
 Fix the listed problems in one derivative item. You get the claim ledger, the item as JSON and the
 problems. Unsupported figures: remove the sentence or restate it using the ledger claim it was

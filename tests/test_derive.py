@@ -99,3 +99,58 @@ def test_derive_cli_writes_distribution_file(tmp_path, monkeypatch):
     payload = json.loads((asset / "distribution" / "derivatives" / "video_script.json").read_text())
     assert payload["items"][0]["audit"]["remaining"] == []
     assert [c["id"] for c in payload["ledger"]] == ["L1", "L2"]
+
+
+CAROUSEL = {
+    "title": "Placebo did most of the work",
+    "topic_tag": "SLEEP · MAGNESIUM",
+    "eyebrow": "MAGNESIUM BISGLYCINATE",
+    "slides": [
+        {"type": "cover", "headline": "Most of the sleep gain showed up on placebo too", "dek": "ISI fell 3.9 points on 250 mg."},
+        {"type": "evidence", "label": "WHAT THE EVIDENCE SUPPORTS",
+         "rows": [{"claim": "Bisglycinate vs placebo", "strength": 2, "note": "155 adults, four weeks"}]},
+        {"type": "point", "headline": "Placebo fell 2.3 points", "body": "Log your sleep scores to compare."},
+        {"type": "cta", "headline": "Track it", "body": "Log dose and sleep", "button": "Track your stack"},
+    ],
+    "caption": "A four-week trial in 155 adults.",
+    "sources": "PMID 40918053 · 2025",
+    "claim_ids": ["L1", "L2"],
+}
+
+
+def test_carousel_texts_cover_slides_and_caption_but_not_footer_or_scores():
+    texts = dv.carousel_texts(CAROUSEL)
+    joined = "\n".join(texts)
+    assert "Placebo fell 2.3 points" in joined and "155 adults, four weeks" in joined and "A four-week trial" in joined
+    assert "2025" not in joined and "evidence" not in texts  # footer and slide types are not reader copy
+
+
+def test_carousel_derive_passes_gates_from_the_ledger(tmp_path, monkeypatch):
+    monkeypatch.setattr(dv, "build_provider", lambda name, config: StubProvider([CAROUSEL]))
+    payload = asyncio.run(DerivePipeline(_config(tmp_path)).run(
+        "carousel", brief="B", anchor_title="T", anchor_text="A", ledger=load_ledger(CLAIMS)))
+    item = payload["items"][0]
+    assert payload["kind"] == "carousel" and payload["ledger_source"] == "claims"
+    assert item["audit"]["gates"]["ledger"] == []
+
+
+def test_carousel_gate_flags_a_figure_outside_the_ledger(tmp_path, monkeypatch):
+    bad = {**CAROUSEL, "slides": CAROUSEL["slides"] + [{"type": "point", "headline": "Works for 80% of people", "body": "x"}]}
+    monkeypatch.setattr(dv, "build_provider", lambda name, config: StubProvider([bad], fixed=bad))
+    item = asyncio.run(DerivePipeline(_config(tmp_path)).run(
+        "carousel", brief="B", anchor_title="T", anchor_text="A", ledger=load_ledger(CLAIMS)))["items"][0]
+    assert any("'80'" in p for p in item["audit"]["remaining"])
+
+
+class ClaimsStub:
+    name = "stub"
+
+    async def generate_simple(self, user_prompt, system_prompt="", max_tokens=4096, temperature=0.7):
+        content = json.dumps({"claims": [{"text": "ISI fell 3.9 points.", "citation": "PMID 40918053"}, {"text": ""}]})
+        return LLMResponse(content=content, input_tokens=1, output_tokens=1, model="stub", provider="stub", cost=0.0)
+
+
+def test_extract_ledger_marks_claims_as_from_the_anchor_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(dv, "build_provider", lambda name, config: ClaimsStub())
+    ledger = asyncio.run(DerivePipeline(_config(tmp_path)).extract_ledger("article"))
+    assert ledger == [{"id": "L1", "text": "ISI fell 3.9 points.", "citation": "PMID 40918053", "url": None, "source": "anchor-text"}]
