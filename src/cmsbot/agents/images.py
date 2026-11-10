@@ -204,8 +204,12 @@ class ImageDirector:
         content_type: ContentType,
         output_dir: Path,
         log_fn=None,
+        skip_hero: bool = False,
     ) -> tuple[list[ImageSpec], list[LLMResponse]]:
-        """Plan and generate visuals with method-aware routing."""
+        """Plan and generate visuals with method-aware routing.
+
+        skip_hero: the caller already has a hero (e.g. a refresh keeps the published one), so plan sections only.
+        """
         log = log_fn or (lambda msg: None)
         responses: list[LLMResponse] = []
 
@@ -232,6 +236,8 @@ What visuals does this content need? Output a JSON array."""
             _parse_image_specs(director_response.content),
             content_type=content_type,
         )
+        if skip_hero:
+            specs = [s for s in specs if s.placement != "hero"]
 
         images_dir = output_dir / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
@@ -270,7 +276,7 @@ What visuals does this content need? Output a JSON array."""
 
         # A blog needs a hero for its thumbnail and social cards. When the planned one was
         # skipped (text-heavy concept) or never planned, fall back to a plain photograph.
-        if content_type == ContentType.BLOG and not any(s.placement == "hero" for s in generated_specs):
+        if content_type == ContentType.BLOG and not skip_hero and not any(s.placement == "hero" for s in generated_specs):
             hero = _fallback_hero_spec(final_content)
             if self.budget.can_afford(self._estimate_slot_cost(hero)):
                 log("  hero: none planned or usable; generating a fallback photograph")

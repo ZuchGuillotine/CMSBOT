@@ -662,3 +662,37 @@ def test_sanitize_svg_accepts_title_and_desc():
         '<rect x="0" y="0" width="40" height="20"/><text x="5" y="15">Dose</text></svg>'
     )
     assert "<title>Dose vs level</title>" in sanitize_svg(svg).replace("ns0:", "")
+
+
+def test_sanitize_svg_accepts_font_style():
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50">'
+           '<text x="5" y="15" font-style="italic">Dose</text></svg>')
+    assert 'font-style="italic"' in sanitize_svg(svg)
+
+
+@pytest.mark.asyncio
+async def test_skip_hero_plans_sections_only_and_never_falls_back(fake_postprocess, tmp_path):
+    director_provider = StubLLMProvider(
+        [json.dumps([
+            {"description": "Runner at dawn", "alt_text": "Runner", "placement": "hero", "method": "generate"},
+            {"description": "Bowl of nuts", "alt_text": "Nuts", "placement": "section-1", "method": "generate"},
+        ])],
+        name="director",
+    )
+    raster_provider = StubImageProvider("grok", image_bytes=b"photo")
+    judge = StubJudge(
+        ImageJudgment(winner_index=0, reasoning="ok", scores=[8], assessments=[_make_assessment()],
+                      provider="judge", model="judge-model")
+    )
+    director = ImageDirector(
+        director_provider=director_provider, raster_image_providers=[raster_provider],
+        fetch_provider=None, judge=judge, budget=BudgetTracker(cap=10.0),
+    )
+
+    images, _ = await director.generate_images(
+        task_prompt="Magnesium", final_content="# Magnesium\n\n## Food\nBody.",
+        content_type=ContentType.BLOG, output_dir=tmp_path, skip_hero=True,
+    )
+
+    assert [i.placement for i in images] == ["section-1"]
+    assert len(raster_provider.calls) == 1  # the section only: no hero, no fallback hero

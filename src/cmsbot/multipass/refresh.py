@@ -128,25 +128,19 @@ class RefreshPipeline:
             old_hero = next((images_dir / n for n in HERO_NAMES if (images_dir / n).exists()), None)
             if images_dir.exists():
                 shutil.move(str(images_dir), str(backup / "images"))
+            # Keep the hero readers (and the published thumbnail) already know; plan sections only
             images, responses = await build_image_director(self.config, self.budget).generate_images(
-                task_prompt, revised, ContentType.BLOG, source, log_fn=self._log
+                task_prompt, revised, ContentType.BLOG, source, log_fn=self._log, skip_hero=old_hero is not None
             )
             for r in responses:
                 self.budget.record("image_director", r.provider, r.model, r.input_tokens, r.output_tokens)
             if old_hero is not None:
-                # Keep the hero readers (and the published thumbnail) already know
-                kept = backup / "images" / old_hero.name
-                (source / "images").mkdir(exist_ok=True)
-                for spec in images:
-                    if spec.placement == "hero" and spec.file_path:
-                        (source / spec.file_path).unlink(missing_ok=True)
-                        spec.file_path = f"images/{old_hero.name}"
-                shutil.copy2(kept, source / "images" / old_hero.name)
-                if not any(s.placement == "hero" for s in images):
-                    from cmsbot.models import ImageSpec
+                from cmsbot.models import ImageSpec
 
-                    images.append(ImageSpec(description="hero", alt_text=revised.splitlines()[0][2:].strip(),
-                                            placement="hero", method="generate", file_path=f"images/{old_hero.name}"))
+                (source / "images").mkdir(exist_ok=True)
+                shutil.copy2(backup / "images" / old_hero.name, source / "images" / old_hero.name)
+                images.insert(0, ImageSpec(description="hero", alt_text=revised.splitlines()[0][2:].strip(),
+                                           placement="hero", method="existing", file_path=f"images/{old_hero.name}"))
         else:
             self._log("[2/3 Images] skipped (--no-images); keeping existing images")
             images = existing_images(source, revised.splitlines()[0][2:].strip())

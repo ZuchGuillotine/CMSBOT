@@ -42,6 +42,7 @@ SAFE_ATTRS = {
     "fill-opacity",
     "font-family",
     "font-size",
+    "font-style",
     "font-weight",
     "height",
     "id",
