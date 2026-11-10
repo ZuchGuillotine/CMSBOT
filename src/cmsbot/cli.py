@@ -416,6 +416,58 @@ def derive(
                 console.print(f"  item {i}: " + "; ".join(notes[:5]))
 
 
+@main.command()
+@click.argument("asset_set_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--no-images", is_flag=True, default=False, help="Keep the existing images instead of planning new ones.")
+@click.option("--context-file", "-c", type=click.Path(exists=True), default=None)
+@click.option("--project-file", "-p", type=click.Path(exists=True), default=None)
+@click.option("--style", "-s", default=None)
+@click.option("--env-file", type=click.Path(exists=True), default=None)
+@click.option("--budget", type=float, default=None, help="Budget cap in USD.")
+def refresh(
+    asset_set_dir: Path,
+    no_images: bool,
+    context_file: str | None,
+    project_file: str | None,
+    style: str | None,
+    env_file: str | None,
+    budget: float | None,
+):
+    """Restructure a finished blog: ## headings, tables, rule fixes and new section images; no new facts.
+
+    The previous content.md, index.html and images are kept in source/pre-refresh-<time>/.
+    """
+    from cmsbot.content_ops import resolve_asset_set_root
+    from cmsbot.multipass.refresh import RefreshError, RefreshPipeline
+
+    config = Config.from_env(env_file)
+    if budget is not None:
+        config.budget_cap = budget
+    asset_root = resolve_asset_set_root(asset_set_dir)
+    project_context = load_project_profile(project_file).render_context_markdown() if project_file else None
+    brief = build_enriched_prompt(
+        "Revise the article below for the project's blog.",
+        context=combine_context_text(project_context, load_context_file(context_file) if context_file else None),
+        style=load_style(style) if style else None,
+    )
+    manifest_path = asset_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    task_prompt = str(manifest.get("prompt") or asset_root.name)
+
+    pipeline = RefreshPipeline(config, images=not no_images)
+    pipeline.set_logger(lambda msg: console.print(msg))
+    console.print(f"[bold]Refresh[/bold] {asset_root.name}")
+    try:
+        report = asyncio.run(pipeline.run(asset_root, brief, task_prompt))
+    except RefreshError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    console.print(
+        f"REFRESH COMPLETE | {report['headings']} headings | {report['tables']} tables | "
+        f"{len(report['images'])} images | {report['gaps']} gaps | ${report['cost']:.4f} | backup {report['backup']}"
+    )
+
+
 @main.command("export-blog-draft")
 @click.argument("output_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option("--category", default=None, help="Optional category for the exported draft.")

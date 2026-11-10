@@ -54,10 +54,11 @@ structural choices of the most recent pieces. Return ONLY a JSON object:
     "credibility": "the evidence carrying the piece: data, worked example, study, stated limitation",
     "time": "dates or periods the claims are anchored to",
     "length_words": 900,
-    "headings": false
+    "headings": ["## heading text, in order"]
   },
   "units": [
-    {"n": 1, "kind": "case|data|counterargument|instruction|comparison|mechanism|example|limitation",
+    {"n": 1, "kind": "case|data|counterargument|instruction|comparison|table|mechanism|example|limitation",
+     "heading": "the ## heading this unit starts under, or null if it continues the previous section",
      "job": "what this unit does for the reader", "material_ids": ["M1"], "target_words": 120}
   ],
   "rarity_check": {"would_fit_most_pieces_on_this_topic": false, "changes_made": ["..."]}
@@ -65,11 +66,18 @@ structural choices of the most recent pieces. Return ONLY a JSON object:
 
 Rules (from the multipass method):
 - No thesis-plus-roadmap before the first unit. No restated thesis or summary at the end.
-- At least one source of view besides the author, and something for the reader to do at the point of need.
+- At least one source of view besides the author, and something for the reader to do at the point of need,
+  of a kind the brief's Brand Rules and Disallowed Claims allow (if they limit reader actions to tracking, plan a
+  tracking action, never advice to take, change or test something).
 - Not every unit explains a mechanism. Mix case, data, counterargument, instruction, comparison.
 - Units get the length their material needs; avoid parallel units of equal size and identical internal shape.
 - Choose the shortest length the material supports (comparison or question pieces usually 700-1400 words).
-- Headings only where a reader will scan or jump; prose under ~1200 words usually needs none.
+- This is a web article that readers scan and search engines index: group the units under 3-6 "## " section
+  headings, each phrased as the question or finding that section answers, in words a reader would search.
+  A heading covers one or more units; never one heading per paragraph, never a heading for the opening unit.
+- When material compares two or more options (forms, doses, groups, studies) on the same measures, make that a
+  "table" unit: a markdown table built only from material values, plus one or two sentences on how to read it.
+  Plan at least one table when such a comparison exists in the material; never pad a table with invented cells.
 - Do not repeat the opening, ending or unit sequence of the recent pieces listed.
 - Rarity check: if the plan would fit most pieces on this topic, change at least two structural decisions
   in ways the material supports. Departures must serve the reader."""
@@ -79,6 +87,10 @@ Pass 3: write the piece from the plan. You get the brief (including project
 voice and style rules), the material and the plan.
 
 - Write each unit in plan order, doing the job assigned to it, at roughly its target length.
+- Start a "## " heading exactly where the plan gives a unit a heading. Write "table" units as GitHub markdown
+  tables (header row, separator row, one row per option) followed by one or two sentences reading them.
+- Reader actions follow the brief's Brand Rules and Disallowed Claims; when those limit actions to tracking,
+  suggest what to log or compare, never what to take, change, dose or test.
 - Use only facts from the material. Cite studies inline where the claim is made, as a markdown link
   to the paper's URL or as (PMID 12345678).
 - Keep every bracketed gap as a visible [bracket]; never fill it with an invented specific.
@@ -101,22 +113,25 @@ classify these features. Return ONLY a JSON object:
     "institutional_credibility_without_evidence": false,
     "mostly_mechanism_units": false,
     "parallel_equal_units": false,
-    "no_specific_dates": false
+    "no_specific_dates": false,
+    "breaks_brief_rules": false
   },
   "fixes": [
     {"feature": "conclusion_restates_or_reframes", "action": "cut|move|replace",
      "unit": "which paragraph or section", "instruction": "exactly what to cut, move or replace it with"}
   ]
 }
-true means the AI-leaning pattern is present. Give a fix for every true feature.
+true means the AI-leaning pattern is present. breaks_brief_rules is true when any sentence breaks the brief's
+Brand Rules or Disallowed Claims (for example advice the brief forbids); its fix cuts or replaces that sentence.
+Give a fix for every true feature.
 "keep" is allowed only for mostly_mechanism_units, parallel_equal_units and
 no_specific_dates, and only when the material makes it the right choice (explain
 why in the instruction). Never "keep" thesis_before_first_section,
-conclusion_restates_or_reframes or has_summary_stage.
+conclusion_restates_or_reframes, has_summary_stage or breaks_brief_rules.
 
-Reader actions are wanted, not a problem: a specific next step, a protocol to try,
-or a link placed where the reader needs it counts as reader participation. Never
-ask to remove them, and never ask to remove citations or [bracketed] gaps. An ending
+Reader actions the brief allows are wanted, not a problem: a specific next step or a link placed where the
+reader needs it counts as reader participation. Never ask to remove allowed actions, ## headings, tables,
+citations or [bracketed] gaps; do flag actions the brief's rules forbid under breaks_brief_rules. An ending
 that is a concrete next step or an open question is not a summary stage.
 Fixes are structural: cut, move or replace units. Rewording sentences does not count."""
 
@@ -129,7 +144,8 @@ and a list of fixes. Make each fix by cutting, moving or replacing units:
 - Every section explains a mechanism: convert one into a case, a data point or an objection with its answer.
 - No outside voice: add one from the material, or a [bracket] where one belongs.
 - Parallel sections of equal length: merge, cut or expand by what the material warrants.
-Keep citations, [brackets] and reader actions (next steps, protocols, links) intact.
+- Breaks brief rules: cut the sentence, or replace forbidden advice with an allowed action (e.g. what to track).
+Keep citations, [brackets], ## headings, tables and the reader actions the brief allows intact.
 Use only facts from the material. Write in full sentences with varied length;
 do not answer a fix by chopping text into fragments.
 Output the full revised piece in markdown, starting with the "# " title line, and nothing else."""
@@ -160,6 +176,8 @@ Rules for every derivative:
 - Never invent anecdotes, testimonials, quotes, people, or first-person experiences ("I tried",
   "my clients"). The account speaks as a team that reads the research, not as a user.
 - Structure/function language only: no claims that anything treats, cures or prevents a disease.
+- Follow the brief's Brand Rules and Disallowed Claims. Reader actions must be ones they allow; when they limit
+  actions to tracking, say what to log or compare, never what to take, change, dose or test.
 - No roadmap openers ("in this thread", "here's what"), no summary or restated thesis at the end,
   no "it's not X, it's Y" frames, no "whether you're..." reader flattery. Follow the style rules in
   the brief (they may ban em dashes).
@@ -181,7 +199,7 @@ The reader opted in for research updates and already supplements. 350-600 words.
   about the week.
 - Cover the anchor's research in your own order; do not paraphrase the article top to bottom.
 - If a FOCUS AREA is given, connect the finding to it in one short section, using only ledger facts.
-- Give the reader one thing to do or track this week.
+- Give the reader one thing to track or watch for this week, within the brief's rules.
 - Link to the full article exactly once with a markdown link whose URL is {{{{anchor_url}}}}
   (keep those braces literally). Cite studies inline as markdown links to their URL.
 - No sign-off cliches ("Stay healthy!"). End on the action or the open question.
@@ -199,7 +217,7 @@ Return ONLY a JSON object:
 
 Write the number of threads requested, each a standalone thread on a different angle:
 a single study read closely, a reader objection with its answer, a common belief the ledger
-contradicts, a how-to-track protocol, a limitation people skip. 3-7 posts per thread.
+contradicts, what to track and compare to see it for yourself, a limitation people skip. 3-7 posts per thread.
 - Each post is under 270 characters, no hashtags, no emoji bullets, no "1/" numbering.
 - The first post carries the specific finding or question; it is not a teaser.
 - Put each study's URL once, in the first post that uses it (counts as ~23 characters); later posts
@@ -241,3 +259,30 @@ meant to reflect; never keep a figure the ledger lacks. Invented anecdotes or te
 them. Surface patterns: replace with a plain statement, not a synonym in the same frame.
 Change only what the problems require. Return ONLY the corrected item as a JSON object with the
 same keys."""
+
+
+# ---- Refresh: restructure a finished piece without new facts (`cmsbot refresh`) ----
+
+REFRESH_SYSTEM = """\
+Revise a finished web article for structure only. You get the brief (with the project's Brand Rules and
+Disallowed Claims), the source material it was written from (may be empty) and the article.
+
+- Group the body under 3-6 "## " section headings, each phrased as the question or finding that section
+  answers, in words a reader would search. No heading above the opening paragraph; never one per paragraph.
+- Where the article compares two or more options (forms, doses, groups, studies) on the same measures,
+  present that comparison as a GitHub markdown table (header row, separator row, one row per option) built
+  only from figures already in the article, followed by one or two sentences on how to read it. Remove the
+  prose the table now repeats. If the article has no such comparison, add no table.
+- Cut or replace every sentence that breaks the brief's Brand Rules or Disallowed Claims. Replace forbidden
+  advice (what to take, change, dose or test) with an allowed reader action such as what to track or compare,
+  or cut it.
+- Add no facts, figures, studies or claims. Every number you write must already appear in the article.
+- Keep citations, links and [bracketed] gaps exactly as written. Keep the "# " title line.
+- Move and group the author's sentences rather than rewriting them; change wording only where a heading,
+  table or rule fix requires it.
+Output the full revised article in markdown, starting with the "# " title line, and nothing else."""
+
+REFRESH_FIX_SYSTEM = """\
+Your revision introduced figures that are not in the original article. You get the original, your
+revision and the figures. Remove each figure, or restore the original wording it came from. Change
+nothing else. Output the full corrected article in markdown, starting with the "# " title line."""
