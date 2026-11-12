@@ -1,0 +1,397 @@
+"""HTTP surface of the Hub: the review page, a REST API, and an MCP endpoint over the same rules.
+
+  /            review page (people)
+  /api/...     REST (scripts, `cmsbot hub` commands)
+  /mcp         MCP, streamable HTTP (Claude, Grok Bot, Codex and any other agent)
+
+Every request carries a Hub token: `Authorization: Bearer <token>`, or `?token=<token>` for MCP clients
+that can only store a URL.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import contextvars
+import functools
+import os
+from importlib import resources
+from typing import Any
+
+from fastapi import Body, Depends, FastAPI, Header, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+
+from cmsbot.hub.service import (
+    CHANNELS,
+    KINDS,
+    POST_LIMITS,
+    Actor,
+    Hub,
+    HubError,
+)
+from cmsbot.hub.store import Store
+
+_actor: contextvars.ContextVar[Actor | None] = contextvars.ContextVar("cmsbot_hub_actor", default=None)
+
+
+def default_db_path() -> str:
+    return os.environ.get("CMSBOT_HUB_DB", "hub-data/hub.sqlite3")
+
+
+def _bearer(header: str | None) -> str:
+    if header and header.lower().startswith("bearer "):
+        return header[7:].strip()
+    return ""
+
+
+def build_mcp(hub: Hub):
+    from mcp.server.mcpserver import MCPServer
+    from mcp.server.mcpserver.exceptions import ToolError
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    server = MCPServer(
+        "cmsbot-hub",
+        log_level="WARNING",
+        instructions=(
+            "CMSBOT Hub holds the content state for every project: plans, drafts, review status, approved copy, "
+            "posts, metrics, costs and learnings. Start with get_brief for the project. Drafting agents save drafts "
+            "and submit them; only a person approves. Posting agents call ready_to_post, claim_post, post exactly "
+            "the returned copy, then mark_posted and later report_metrics. Never post anything that did not come "
+            "from ready_to_post or claim_post."
+        ),
+    )
+
+    def actor() -> Actor:
+        current = _actor.get()
+        if current is None:
+            raise HubError("Missing or invalid Hub token.", 401)
+        return current
+
+    def tool(fn):
+        @functools.wraps(fn)
+        def wrapped(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except HubError as exc:  # show the agent the reason, not a generic crash
+                raise ToolError(str(exc)) from exc
+
+        return server.tool()(wrapped)
+
+    @tool
+    def list_projects() -> list[dict[str, Any]]:
+        """Projects this token can work on."""
+        return [{"slug": p["slug"], "name": p["name"]} for p in hub.list_projects(actor())]
+
+    @tool
+    def get_brief(project: str) -> dict[str, Any]:
+        """Read this before planning or writing: brand kit, pillars, recent clusters, accepted learnings,
+        open trend signals, reviewer feedback waiting on you, and this month's spend against budget."""
+        return hub.brief(actor(), project)
+
+    @tool
+    def create_cluster(project: str, name: str, pillar: str = "", theme: str = "", keywords: list[str] | None = None,
+                       starts_on: str = "", ends_on: str = "", origin: str = "pillar", signal_id: int = 0) -> dict[str, Any]:
+        """Plan one theme for one period under a pillar. Use origin='trend' and signal_id when it answers a trend signal."""
+        return hub.create_cluster(actor(), project, name, pillar=pillar or None, theme=theme, keywords=keywords,
+                                  starts_on=starts_on or None, ends_on=ends_on or None, origin=origin,
+                                  signal_id=signal_id or None)
+
+    @tool
+    def list_items(project: str = "", status: str = "", channel: str = "", kind: str = "", limit: int = 100) -> list[dict[str, Any]]:
+        """List items. status takes a comma list, e.g. 'needs_revision,failed'. Posting agents use ready_to_post instead."""
+        return hub.list_items(actor(), project=project or None, status=status or None, channel=channel or None,
+                              kind=kind or None, limit=limit)
+
+    @tool
+    def get_item(item_id: int) -> dict[str, Any]:
+        """One item with its body, claims, reviewer notes, blockers and history."""
+        return hub.get_item(actor(), item_id)
+
+    @tool
+    def save_draft(project: str, kind: str, channel: str, title: str, body: dict[str, Any], item_id: int = 0,
+                   cluster_id: int = 0, parent_id: int = 0, account: str = "", media: list[Any] | None = None,
+                   attributes: dict[str, Any] | None = None, link: str = "", gaps: list[str] | None = None,
+                   audit: dict[str, Any] | None = None, external_ref: str = "") -> dict[str, Any]:
+        """Create a draft, or update one you may still edit (pass item_id). kind: blog, newsletter, thread, post,
+        carousel, short_video, image, infographic. channel: blog, email, x, threads, instagram, linkedin, tiktok,
+        facebook, reddit, youtube. parent_id links a derivative to its anchor (it then restates the anchor's
+        claims; list them in body.claim_ids). attributes are the things you want compared later
+        (hook, format, style, persona, length...). gaps are facts you could not confirm; never invent them."""
+        if item_id:
+            return hub.update_item(actor(), item_id, title=title, body=body, media=media, attributes=attributes,
+                                   link=link or None, gaps=gaps, audit=audit, account=account or None)
+        return hub.create_item(actor(), project, kind=kind, channel=channel, title=title, body=body,
+                               cluster_id=cluster_id or None, parent_id=parent_id or None, account=account,
+                               media=media, attributes=attributes, link=link, gaps=gaps, audit=audit,
+                               external_ref=external_ref or None)
+
+    @tool
+    def set_claims(item_id: int, claims: list[dict[str, Any]]) -> dict[str, Any]:
+        """Replace an anchor item's claim ledger: [{text, citation, citation_url}]. A person verifies each one."""
+        return hub.set_claims(actor(), item_id, claims)
+
+    @tool
+    def submit_for_review(item_id: int) -> dict[str, Any]:
+        """Hand a finished draft to the reviewer. You can't edit it again unless they request changes."""
+        item = hub.submit(actor(), item_id)
+        return {"id": item["id"], "status": item["status"], "blockers": item["blockers"]}
+
+    @tool
+    def report_failure(item_id: int, error: str) -> dict[str, Any]:
+        """Record that drafting this item failed, so a person sees it instead of it going quiet."""
+        item = hub.fail(actor(), item_id, error)
+        return {"id": item["id"], "status": item["status"], "attempts": item["attempts"]}
+
+    @tool
+    def ready_to_post(project: str = "", channel: str = "", due_within_hours: float = 24) -> list[dict[str, Any]]:
+        """Approved copy that is due. This is the only source of postable content."""
+        return hub.ready_to_post(actor(), project=project or None, channel=channel or None,
+                                 due_within_hours=due_within_hours)
+
+    @tool
+    def claim_post(item_id: int) -> dict[str, Any]:
+        """Take an approved item for posting. Returns the exact copy, media and tracked link to post, unchanged."""
+        return hub.claim(actor(), item_id)
+
+    @tool
+    def release_post(item_id: int, reason: str = "") -> dict[str, Any]:
+        """Give a claimed item back without posting (API error, account issue)."""
+        return hub.release(actor(), item_id, reason)
+
+    @tool
+    def mark_posted(item_id: int, post_url: str = "", post_id: str = "", posted_at: str = "", account: str = "") -> dict[str, Any]:
+        """Record that the item went out, with its URL and platform id."""
+        return hub.mark_posted(actor(), item_id, post_url=post_url, post_id=post_id, posted_at=posted_at or None,
+                               account=account)
+
+    @tool
+    def report_metrics(item_id: int, metrics: dict[str, float], measured_at: str = "") -> dict[str, Any]:
+        """One snapshot of a post's numbers (impressions, reach, views, likes, comments, saves, shares, clicks,
+        follows, watch_seconds, avg_watch_pct). Report at about 24h, 72h and 7d after posting."""
+        return hub.report_metrics(actor(), item_id, metrics, measured_at=measured_at or None)
+
+    @tool
+    def report_conversions(project: str, source: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        """Site results per item from GA4 or Mixpanel: [{utm_content: 'cmsbot-<id>', day, sessions, signups, revenue_usd}]."""
+        return hub.report_conversions(actor(), project, rows, source=source)
+
+    @tool
+    def submit_signal(project: str, source: str, topic: str, summary: str = "", channel: str = "",
+                      evidence: dict[str, Any] | None = None, score: float = 0, expires_in_days: float = 7) -> dict[str, Any]:
+        """Report a trend or search opportunity (what is rising, where, and the evidence). Planning reads these."""
+        return hub.submit_signal(actor(), project, source=source, topic=topic, summary=summary, channel=channel,
+                                 evidence=evidence, score=score, expires_in_days=expires_in_days)
+
+    @tool
+    def record_cost(project: str, amount_usd: float, category: str, vendor: str = "", item_id: int = 0, note: str = "") -> dict[str, Any]:
+        """Log money spent making or distributing content. category: llm, image, video, audio, tool, subscription,
+        human, other. Returns month-to-date spend."""
+        return hub.record_cost(actor(), project, amount_usd=amount_usd, category=category, vendor=vendor,
+                               item_id=item_id or None, note=note)
+
+    @tool
+    def performance(project: str, age_hours: float = 168) -> dict[str, Any]:
+        """How content is doing: posts compared at the same age against their channel's recent baseline, by attribute,
+        with cost per signup and a suggested mix. Read the caveats before drawing conclusions."""
+        return hub.performance(actor(), project, age_hours=age_hours)
+
+    @tool
+    def propose_learning(project: str, statement: str, scope: dict[str, Any] | None = None,
+                         evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Propose a change to how content is made, with the evidence. It takes effect only after a person accepts it."""
+        return hub.propose_learning(actor(), project, statement, scope=scope, evidence=evidence)
+
+    inner = server.streamable_http_app(
+        streamable_http_path="/mcp", stateless_http=True, json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+
+    async def authed(scope, receive, send):
+        if scope["type"] != "http":
+            return await inner(scope, receive, send)
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        token = _bearer(headers.get("authorization"))
+        if not token:
+            from urllib.parse import parse_qs
+            token = (parse_qs(scope.get("query_string", b"").decode()).get("token") or [""])[0]
+        found = hub.authenticate(token)
+        if found is None:
+            response = JSONResponse({"error": "Missing or invalid Hub token."}, status_code=401)
+            return await response(scope, receive, send)
+        reset = _actor.set(found)
+        try:
+            await inner(scope, receive, send)
+        finally:
+            _actor.reset(reset)
+
+    return server, authed
+
+
+def create_app(db_path: str | None = None, *, hub: Hub | None = None, with_mcp: bool = True) -> FastAPI:
+    hub = hub or Hub(Store(db_path or default_db_path()))
+    server, mcp_app = build_mcp(hub) if with_mcp else (None, None)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_: FastAPI):
+        if server is None:
+            yield
+            return
+        async with server.session_manager.run():
+            yield
+
+    app = FastAPI(title="CMSBOT Hub", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
+    app.state.hub = hub
+
+    @app.exception_handler(HubError)
+    async def hub_error(_: Request, exc: HubError):
+        return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+    def who(authorization: str | None = Header(default=None)) -> Actor:
+        found = hub.authenticate(_bearer(authorization))
+        if found is None:
+            raise HubError("Missing or invalid Hub token.", 401)
+        return found
+
+    @app.get("/", response_class=HTMLResponse)
+    def review_page() -> str:
+        return resources.files("cmsbot.hub").joinpath("review.html").read_text(encoding="utf-8")
+
+    @app.get("/healthz")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/api/me")
+    def me(actor: Actor = Depends(who)) -> dict[str, Any]:
+        return {"name": actor.name, "role": actor.role, "project": actor.project, "kinds": KINDS,
+                "channels": CHANNELS, "post_limits": POST_LIMITS}
+
+    @app.get("/api/projects")
+    def projects(actor: Actor = Depends(who)):
+        return hub.list_projects(actor)
+
+    @app.put("/api/projects/{slug}")
+    def put_project(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.upsert_project(actor, slug, body.get("name", ""), brand=body.get("brand"), settings=body.get("settings"))
+
+    @app.put("/api/projects/{slug}/pillars/{key}")
+    def put_pillar(slug: str, key: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.upsert_pillar(actor, slug, key, body.get("name", key), description=body.get("description", ""),
+                                 weight=float(body.get("weight", 1)), status=body.get("status", "active"))
+
+    @app.get("/api/projects/{slug}/brief")
+    def brief(slug: str, actor: Actor = Depends(who)):
+        return hub.brief(actor, slug)
+
+    @app.post("/api/projects/{slug}/clusters")
+    def post_cluster(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.create_cluster(actor, slug, body["name"], pillar=body.get("pillar"), theme=body.get("theme", ""),
+                                  keywords=body.get("keywords"), starts_on=body.get("starts_on"),
+                                  ends_on=body.get("ends_on"), origin=body.get("origin", "pillar"),
+                                  signal_id=body.get("signal_id"))
+
+    @app.get("/api/items")
+    def items(project: str | None = None, status: str | None = None, channel: str | None = None,
+              kind: str | None = None, limit: int = Query(default=200), actor: Actor = Depends(who)):
+        return hub.list_items(actor, project=project, status=status, channel=channel, kind=kind, limit=limit)
+
+    item_fields = ("title", "body", "media", "attributes", "link", "gaps", "audit", "account")
+
+    @app.post("/api/projects/{slug}/items")
+    def post_item(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        extra = {k: body[k] for k in item_fields if k in body and k != "title"}
+        return hub.create_item(actor, slug, kind=body["kind"], channel=body["channel"], title=body["title"],
+                               cluster_id=body.get("cluster_id"), parent_id=body.get("parent_id"),
+                               external_ref=body.get("external_ref"), **extra)
+
+    @app.get("/api/items/{item_id}")
+    def get_item(item_id: int, actor: Actor = Depends(who)):
+        return hub.get_item(actor, item_id)
+
+    @app.patch("/api/items/{item_id}")
+    def patch_item(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        changes = {k: body[k] for k in (*item_fields, "scheduled_at", "note") if k in body}
+        return hub.update_item(actor, item_id, **changes)
+
+    @app.put("/api/items/{item_id}/claims")
+    def put_claims(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.set_claims(actor, item_id, body.get("claims", []))
+
+    @app.patch("/api/claims/{claim_id}")
+    def patch_claim(claim_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.review_claim(actor, claim_id, **{k: body[k] for k in ("status", "text", "citation", "citation_url", "notes") if k in body})
+
+    @app.post("/api/items/{item_id}/{action}")
+    def item_action(item_id: int, action: str, body: dict[str, Any] = Body(default={}), actor: Actor = Depends(who)):
+        if action == "submit":
+            return hub.submit(actor, item_id)
+        if action == "fail":
+            return hub.fail(actor, item_id, body.get("error", ""))
+        if action == "approve":
+            changes = {k: body[k] for k in item_fields if k in body}
+            if changes:
+                return hub.edit_and_approve(actor, item_id, scheduled_at=body.get("scheduled_at"), note=body.get("note", ""), **changes)
+            return hub.approve(actor, item_id, scheduled_at=body.get("scheduled_at"))
+        if action == "request-changes":
+            return hub.request_changes(actor, item_id, body.get("notes", ""))
+        if action == "reject":
+            return hub.reject(actor, item_id, body.get("notes", ""))
+        if action == "claim":
+            return hub.claim(actor, item_id)
+        if action == "release":
+            return hub.release(actor, item_id, body.get("reason", ""))
+        if action == "posted":
+            return hub.mark_posted(actor, item_id, post_url=body.get("post_url", ""), post_id=body.get("post_id", ""),
+                                   posted_at=body.get("posted_at"), account=body.get("account", ""))
+        if action == "metrics":
+            return hub.report_metrics(actor, item_id, body.get("metrics", {}), measured_at=body.get("measured_at"),
+                                      source=body.get("source", ""))
+        raise HubError(f"Unknown action '{action}'.", 404)
+
+    @app.get("/api/ready")
+    def ready(project: str | None = None, channel: str | None = None, due_within_hours: float = 24,
+              actor: Actor = Depends(who)):
+        return hub.ready_to_post(actor, project=project, channel=channel, due_within_hours=due_within_hours)
+
+    @app.post("/api/projects/{slug}/costs")
+    def post_cost(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.record_cost(actor, slug, amount_usd=body["amount_usd"], category=body["category"],
+                               vendor=body.get("vendor", ""), item_id=body.get("item_id"), note=body.get("note", ""))
+
+    @app.post("/api/projects/{slug}/conversions")
+    def post_conversions(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.report_conversions(actor, slug, body.get("rows", []), source=body.get("source", "manual"))
+
+    @app.get("/api/projects/{slug}/signals")
+    def get_signals(slug: str, status: str = "new", actor: Actor = Depends(who)):
+        return hub.list_signals(actor, slug, status=status)
+
+    @app.post("/api/projects/{slug}/signals")
+    def post_signal(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.submit_signal(actor, slug, source=body.get("source", actor.name), topic=body["topic"],
+                                 summary=body.get("summary", ""), channel=body.get("channel", ""),
+                                 evidence=body.get("evidence"), score=body.get("score", 0),
+                                 expires_in_days=body.get("expires_in_days", 7))
+
+    @app.post("/api/signals/{signal_id}/dismiss")
+    def dismiss_signal(signal_id: int, actor: Actor = Depends(who)):
+        hub.dismiss_signal(actor, signal_id)
+        return {"id": signal_id, "status": "dismissed"}
+
+    @app.get("/api/projects/{slug}/learnings")
+    def get_learnings(slug: str, status: str | None = None, actor: Actor = Depends(who)):
+        return hub.list_learnings(actor, slug, status)
+
+    @app.post("/api/projects/{slug}/learnings")
+    def post_learning(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.propose_learning(actor, slug, body["statement"], scope=body.get("scope"), evidence=body.get("evidence"))
+
+    @app.patch("/api/learnings/{learning_id}")
+    def patch_learning(learning_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.decide_learning(actor, learning_id, body["status"])
+
+    @app.get("/api/projects/{slug}/performance")
+    def get_performance(slug: str, age_hours: float = 168, actor: Actor = Depends(who)):
+        return hub.performance(actor, slug, age_hours=age_hours)
+
+    if mcp_app is not None:
+        app.mount("/", mcp_app)
+    return app

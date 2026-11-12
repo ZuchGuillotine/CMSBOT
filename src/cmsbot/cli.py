@@ -75,8 +75,19 @@ console = Console()
 @click.group()
 @click.version_option(package_name="cmsbot")
 def main():
-    """CMSBOT — Multi-agent content refinement using the Autoreason pattern."""
+    """CMSBOT — content planning, drafting, review hand-off and measurement."""
     pass
+
+
+def _register_hub() -> None:
+    try:
+        from cmsbot.hub.cli import hub_group
+    except ImportError:  # hub extras not installed: `pip install "cmsbot[hub]"`
+        return
+    main.add_command(hub_group)
+
+
+_register_hub()
 
 
 @main.command()

@@ -33,3 +33,4 @@ contexts/*.local.md
 # OS
 .DS_Store
 Thumbs.db
+hub-data/

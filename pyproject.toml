@@ -24,7 +24,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio", "ruff"]
+hub = ["fastapi>=0.115", "uvicorn>=0.30", "mcp>=2.0"]
+dev = ["pytest", "pytest-asyncio", "ruff", "fastapi>=0.115", "uvicorn>=0.30", "mcp>=2.0"]
 
 [project.scripts]
 cmsbot = "cmsbot.cli:main"
@@ -33,4 +34,4 @@ cmsbot = "cmsbot.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-cmsbot = ["templates/*.html", "styles/*.md"]
+cmsbot = ["templates/*.html", "styles/*.md", "hub/*.html"]

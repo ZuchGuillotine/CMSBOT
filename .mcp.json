@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "cmsbot-hub": {
+      "type": "http",
+      "url": "${CMSBOT_HUB_URL:-http://127.0.0.1:8787}/mcp",
+      "headers": { "Authorization": "Bearer ${CMSBOT_HUB_TOKEN:-unset}" }
+    }
+  }
+}
