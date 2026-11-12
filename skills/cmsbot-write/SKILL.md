@@ -39,5 +39,9 @@ and list them in `body.claim_ids` (`"L1"` is the first claim). Write for the cha
 | short_video script (tiktok, instagram, youtube) | `{"hook", "beats": [{"narration", "visual", "overlay_text"}], "ending", "caption"}` |
 | newsletter (email) | `{"subject", "preheader", "markdown"}` |
 
+For a carousel, call `render_carousel(item_id)` after saving and before submitting: it turns the slides
+into images in the project's brand style. Never ask an image model to draw the words. Attach other
+files (video, photos) with `cmsbot hub upload <item_id> <file>`.
+
 Put `{{link}}` where the anchor's URL belongs; the Hub adds tracking tags when it is posted.
 Set `attributes` from the plan. After each paid tool call, `record_cost`.

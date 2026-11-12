@@ -171,6 +171,11 @@ def hub_push(asset_set_dir: Path, project: str, cluster_id: int | None, link: st
         if cost and not item["cost_usd"]:
             remote.call("POST", f"/projects/{project}/costs", {"amount_usd": cost, "category": "llm", "vendor": "cmsbot",
                                                               "item_id": item["id"], "note": asset_set_dir.name})
+        if entry["kind"] == "carousel":
+            try:
+                remote.call("POST", f"/items/{item['id']}/render")
+            except click.ClickException as exc:  # the reviewer sees "images missing" until someone renders
+                click.echo(f"#{item['id']} slides not rendered: {exc.message}")
         if submit:
             item = remote.call("POST", f"/items/{item['id']}/submit")
         click.echo(f"#{item['id']} {entry['kind']} ({entry['channel']}): {item['status']}")
@@ -189,3 +194,73 @@ def hub_ready(project: str | None, channel: str | None) -> None:
 def hub_brief(project: str) -> None:
     """Print what a drafting agent should read before writing, as JSON."""
     click.echo(json.dumps(Remote().call("GET", f"/projects/{project}/brief"), indent=2, ensure_ascii=False))
+
+
+@hub_group.command("upload")
+@click.argument("item_id", type=int)
+@click.argument("files", nargs=-1, required=True, type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--role", default="", help="What the file is for, e.g. video, cover, voiceover.")
+def hub_upload(item_id: int, files: tuple[Path, ...], role: str) -> None:
+    """Attach image, video or audio files to an item. The Hub stores them; you need no bucket keys."""
+    remote = Remote()
+    for path in files:
+        response = remote.client.post(f"/items/{item_id}/media", params={"name": path.name, "role": role},
+                                      content=path.read_bytes(), timeout=600)
+        if response.status_code >= 400:
+            raise click.ClickException(f"Upload of {path.name} refused ({response.status_code}): {response.text[:300]}")
+        click.echo(f"{path.name} -> {response.json()['media'][-1]['url']}")
+
+
+@hub_group.command("render")
+@click.argument("item_id", type=int)
+@click.option("--local", is_flag=True, help="Render on this machine and upload, instead of asking the Hub to render.")
+def hub_render(item_id: int, local: bool) -> None:
+    """Render a carousel item's slide images and attach them."""
+    remote = Remote()
+    if not local:
+        item = remote.call("POST", f"/items/{item_id}/render")
+        click.echo(f"#{item_id}: {sum(1 for m in item['media'] if isinstance(m, dict) and m.get('role') == 'slide')} slides rendered by the Hub.")
+        return
+    import tempfile
+
+    from cmsbot import carousel
+
+    item = remote.call("GET", f"/items/{item_id}")
+    brand = remote.call("GET", f"/projects/{item['project']}/brief")["brand"]
+    with tempfile.TemporaryDirectory() as tmp:
+        result = carousel.render_pngs(item["body"], {"name": item["project"], **brand}, Path(tmp))
+        urls = []
+        for path in result["files"]:
+            response = remote.client.post(f"/items/{item_id}/media/raw", params={"name": path.name}, content=path.read_bytes(), timeout=600)
+            if response.status_code >= 400:
+                raise click.ClickException(f"Upload refused ({response.status_code}): {response.text[:300]}")
+            urls.append(response.json()["url"])
+    remote.call("PUT", f"/items/{item_id}/render", {"urls": urls, "style": result["style"], "hash": result["hash"]})
+    click.echo(f"#{item_id}: {len(urls)} slides rendered here and attached.")
+
+
+@click.group("carousel")
+def carousel_group() -> None:
+    """Render carousel slides from a slide spec and a project's brand kit."""
+
+
+@carousel_group.command("render")
+@click.argument("spec_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path))
+@click.option("--project-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None,
+              help="project.json whose `visual` section sets colours, fonts and wordmark.")
+@click.option("--item", type=int, default=0, help="Which carousel in a derive file ({\"items\": [...]}).")
+@click.option("--style", default=None)
+def carousel_render(spec_file: Path, out_dir: Path, project_file: Path | None, item: int, style: str | None) -> None:
+    """Write slide-NN.png files (1080x1350) to --out."""
+    from cmsbot import carousel
+
+    spec = json.loads(spec_file.read_text(encoding="utf-8"))
+    if isinstance(spec.get("items"), list):
+        spec = spec["items"][item]
+    brand = json.loads(project_file.read_text(encoding="utf-8")) if project_file else {}
+    try:
+        result = carousel.render_pngs(spec, brand, out_dir, style=style)
+    except carousel.CarouselError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"{len(result['files'])} slides ({result['style']}) -> {out_dir}")

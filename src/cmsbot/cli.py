@@ -81,10 +81,11 @@ def main():
 
 def _register_hub() -> None:
     try:
-        from cmsbot.hub.cli import hub_group
+        from cmsbot.hub.cli import carousel_group, hub_group
     except ImportError:  # hub extras not installed: `pip install "cmsbot[hub]"`
         return
     main.add_command(hub_group)
+    main.add_command(carousel_group)
 
 
 _register_hub()

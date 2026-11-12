@@ -18,7 +18,7 @@ from importlib import resources
 from typing import Any
 
 from fastapi import Body, Depends, FastAPI, Header, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from cmsbot.hub.service import (
     CHANNELS,
@@ -28,6 +28,8 @@ from cmsbot.hub.service import (
     Hub,
     HubError,
 )
+from cmsbot.hub import render as rendering
+from cmsbot.hub.media import MAX_UPLOAD_BYTES, MediaError, content_type_for, media_key, storage_from_env
 from cmsbot.hub.store import Store
 
 _actor: contextvars.ContextVar[Actor | None] = contextvars.ContextVar("cmsbot_hub_actor", default=None)
@@ -43,7 +45,7 @@ def _bearer(header: str | None) -> str:
     return ""
 
 
-def build_mcp(hub: Hub):
+def build_mcp(hub: Hub, storage):
     from mcp.server.mcpserver import MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
     from mcp.server.transport_security import TransportSecuritySettings
@@ -123,6 +125,13 @@ def build_mcp(hub: Hub):
                                cluster_id=cluster_id or None, parent_id=parent_id or None, account=account,
                                media=media, attributes=attributes, link=link, gaps=gaps, audit=audit,
                                external_ref=external_ref or None)
+
+    @tool
+    def render_carousel(item_id: int) -> dict[str, Any]:
+        """Turn a carousel draft's slides into images in the project's brand style and attach them. Call after
+        save_draft and before submit_for_review; a carousel can't be approved with missing or stale images."""
+        item = rendering.render_item(hub, storage, actor(), item_id)
+        return {"id": item["id"], "media": item["media"], "slides_stale": item["slides_stale"]}
 
     @tool
     def set_claims(item_id: int, claims: list[dict[str, Any]]) -> dict[str, Any]:
@@ -226,9 +235,11 @@ def build_mcp(hub: Hub):
     return server, authed
 
 
-def create_app(db_path: str | None = None, *, hub: Hub | None = None, with_mcp: bool = True) -> FastAPI:
-    hub = hub or Hub(Store(db_path or default_db_path()))
-    server, mcp_app = build_mcp(hub) if with_mcp else (None, None)
+def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=None, with_mcp: bool = True) -> FastAPI:
+    db_path = db_path or default_db_path()
+    hub = hub or Hub(Store(db_path), os.environ.get("CMSBOT_HUB_PUBLIC_URL", ""))
+    storage = storage or storage_from_env(db_path if hub.db.path != ":memory:" else ":memory:")
+    server, mcp_app = build_mcp(hub, storage) if with_mcp else (None, None)
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -244,6 +255,10 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, with_mcp: 
     @app.exception_handler(HubError)
     async def hub_error(_: Request, exc: HubError):
         return JSONResponse({"error": str(exc)}, status_code=exc.status)
+
+    @app.exception_handler(MediaError)
+    async def media_error(_: Request, exc: MediaError):
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
     def who(authorization: str | None = Header(default=None)) -> Actor:
         found = hub.authenticate(_bearer(authorization))
@@ -309,7 +324,55 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, with_mcp: 
     @app.patch("/api/items/{item_id}")
     def patch_item(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
         changes = {k: body[k] for k in (*item_fields, "scheduled_at", "note") if k in body}
-        return hub.update_item(actor, item_id, **changes)
+        hub.update_item(actor, item_id, **changes)
+        if actor.role == "admin":
+            rendering.render_if_stale(hub, storage, actor, item_id)
+        return hub.get_item(actor, item_id)
+
+    @app.post("/api/items/{item_id}/media")
+    async def upload_media(item_id: int, request: Request, name: str = Query(...), role: str = "",
+                           actor: Actor = Depends(who)):
+        """Upload one image, video or audio file as the raw request body and attach it to the item."""
+        item = hub.get_item(actor, item_id)
+        content_type = content_type_for(name, request.headers.get("content-type", ""))
+        data = await request.body()
+        if not data:
+            raise HubError("The upload is empty.")
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HubError(f"File is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.", 413)
+        url = storage.put(media_key(item["project"], item_id, name), data, content_type)
+        return hub.add_media(actor, item_id, url, name=name, role=role)
+
+    @app.post("/api/items/{item_id}/media/raw")
+    async def store_media(item_id: int, request: Request, name: str = Query(...), actor: Actor = Depends(who)):
+        """Store a file for an item without attaching it (used for slide images, attached by PUT /render)."""
+        if actor.role not in ("admin", "generator"):
+            raise HubError("This token may not upload.", 403)
+        item = hub.get_item(actor, item_id)
+        data = await request.body()
+        if not data or len(data) > MAX_UPLOAD_BYTES:
+            raise HubError("The upload is empty or too large.", 413)
+        return {"url": storage.put(media_key(item["project"], item_id, name), data, content_type_for(name))}
+
+    @app.get("/media/{key:path}")
+    def get_media(key: str):
+        path = storage.path_for(key)
+        if path is None:
+            raise HubError("Not found.", 404)
+        return FileResponse(path, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+    @app.post("/api/items/{item_id}/preview")
+    def preview_slides(item_id: int, body: dict[str, Any] = Body(default={}), actor: Actor = Depends(who)):
+        return rendering.preview(hub, actor, item_id, body.get("body"))
+
+    @app.post("/api/items/{item_id}/render")
+    def render_slides(item_id: int, actor: Actor = Depends(who)):
+        return rendering.render_item(hub, storage, actor, item_id)
+
+    @app.put("/api/items/{item_id}/render")
+    def put_render(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        """Attach slide images rendered elsewhere (`cmsbot hub render`), already uploaded with /media."""
+        return hub.set_render(actor, item_id, body["urls"], style=body["style"], render_hash=body["hash"])
 
     @app.put("/api/items/{item_id}/claims")
     def put_claims(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
@@ -328,7 +391,9 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, with_mcp: 
         if action == "approve":
             changes = {k: body[k] for k in item_fields if k in body}
             if changes:
-                return hub.edit_and_approve(actor, item_id, scheduled_at=body.get("scheduled_at"), note=body.get("note", ""), **changes)
+                hub.update_item(actor, item_id, note=body.get("note", "") or "reviewer edit", **changes)
+            if actor.role == "admin":
+                rendering.render_if_stale(hub, storage, actor, item_id)
             return hub.approve(actor, item_id, scheduled_at=body.get("scheduled_at"))
         if action == "request-changes":
             return hub.request_changes(actor, item_id, body.get("notes", ""))

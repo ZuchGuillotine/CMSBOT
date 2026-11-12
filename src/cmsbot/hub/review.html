@@ -49,6 +49,8 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
 table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);font-size:14px}
 th{color:var(--muted);font-weight:500;font-size:12px}
 details summary{cursor:pointer;color:var(--muted)}
+.slides{display:flex;gap:10px;overflow-x:auto;padding-bottom:8px}.slides .slide{flex:none;width:216px;height:270px;overflow:hidden;border-radius:8px;border:1px solid var(--line)}
+.slides iframe{width:1080px;height:1350px;border:0;transform:scale(.2);transform-origin:0 0;pointer-events:none}
 #login{max-width:380px;margin:12vh auto;background:var(--panel);padding:24px;border-radius:12px;border:1px solid var(--line)}
 #toast{position:fixed;top:14px;right:14px;background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;display:none;z-index:9;max-width:60vw}
 @media (max-width:760px){main{grid-template-columns:1fr;height:auto}#list{max-height:38vh;border-right:0;border-bottom:1px solid var(--line)}.actions{left:0}}
@@ -107,7 +109,7 @@ function renderList(){$("list").replaceChildren(...(items.length?items.map(i=>el
   i.scheduled_at?el("span",{class:"chip",text:"⏱ "+local(i.scheduled_at)}):null))):[el("div",{class:"empty",text:"Nothing here."})]))}
 function local(iso){return new Date(iso).toLocaleString([], {month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}
 async function open(id){current=await api("/items/"+id);draft={title:current.title,body:structuredClone(current.body),link:current.link,gaps:[...current.gaps]};dirty=false;renderList();renderDetail()}
-function touch(){dirty=true;const b=$("saveBtn");if(b)b.disabled=false}
+function touch(){dirty=true;const b=$("saveBtn");if(b)b.disabled=false;if(current&&current.kind==="carousel"){clearTimeout(touch.t);const it=current;touch.t=setTimeout(()=>drawSlides(it),500)}}
 function grow(t){t.style.height="auto";t.style.height=(t.scrollHeight+2)+"px"}
 function textField(value,onChange,limit){const t=el("textarea",{rows:"1"});t.value=value;const c=limit?el("div",{class:"count"}):null;
   const upd=()=>{if(c){c.textContent=`${t.value.length} / ${limit}`;c.className="count"+(t.value.length>limit?" over":"")}grow(t)};
@@ -131,7 +133,9 @@ function renderDetail(){const it=current, d=$("detail");const reviewable=["in_re
   if(it.error)parts.push(el("div",{class:"note bad",text:it.error}));
   if(it.changed_since_approval)parts.push(el("div",{class:"note warn",text:"Edited after approval. It will not be posted until approved again."}));
   if(it.review_notes)parts.push(el("div",{class:"note warn",text:"Your note to the agent: "+it.review_notes}));
-  if(it.media.length){parts.push(el("h2",{text:"Media"}),el("div",{class:"media"},...it.media.map(m=>{const url=typeof m==="string"?m:(m.url||"");return /\.(mp4|mov|webm)(\?|$)/i.test(url)?el("video",{src:url,controls:true}):el("img",{src:url,alt:(m&&m.alt)||"",loading:"lazy"})})))}
+  const media=it.media.filter(m=>!(m&&m.role==="slide"));
+  if(media.length){parts.push(el("h2",{text:"Media"}),el("div",{class:"media"},...media.map(m=>{const url=typeof m==="string"?m:(m.url||"");return /\.(mp4|mov|webm)(\?|$)/i.test(url)?el("video",{src:url,controls:true}):el("img",{src:url,alt:(m&&m.alt)||"",loading:"lazy"})})))}
+  if(it.kind==="carousel"){const strip=el("div",{class:"slides",id:"slides"});const state=el("div",{id:"slideState"});parts.push(el("h2",{text:"Slides (live preview)"}),strip,state);setTimeout(()=>drawSlides(it),0)}
   parts.push(el("h2",{text:"Copy"}));const body=editor(draft.body,v=>draft.body=v,"");if(locked)body.querySelectorAll("textarea,input,button").forEach(n=>n.disabled=true);parts.push(body);
   const link=el("input",{type:"url",placeholder:"https://…"});link.value=draft.link;link.disabled=locked;link.addEventListener("input",()=>{draft.link=link.value;touch()});
   parts.push(el("div",{class:"field"},el("label",{text:"Link (tracking tags are added automatically)"}),link,it.tracked_link?el("div",{class:"count",text:it.tracked_link}):null));
@@ -160,6 +164,12 @@ function renderDetail(){const it=current, d=$("detail");const reviewable=["in_re
     bar.append(el("span",{class:"chip ok",text:it.scheduled_at?"Goes out "+local(it.scheduled_at):"Approved, ready for the posting agent"}),url,el("button",{class:"btn",text:"Mark posted",onclick:()=>run(()=>api(`/items/${it.id}/posted`,"POST",{post_url:url.value}),"Marked posted")}),
       el("button",{class:"btn",text:"Send back",onclick:()=>{const n=prompt("What should change?");if(n)run(()=>api(`/items/${it.id}/request-changes`,"POST",{notes:n}),"Sent back")}}))}
   d.replaceChildren(...parts,bar);d.scrollTop=0}
+async function drawSlides(it){const strip=$("slides"),state=$("slideState");if(!strip||!current||current.id!==it.id)return;
+  try{const p=await api(`/items/${it.id}/preview`,"POST",{body:draft.body});if(!$("slides")||current.id!==it.id)return;
+    strip.replaceChildren(...p.html.map(h=>{const f=el("iframe",{sandbox:"",title:"Slide preview",scrolling:"no"});f.srcdoc=h;return el("div",{class:"slide"},f)}));
+    const msg=p.up_to_date?"Images match this text.":p.can_render?"Images will be rendered again when you save or approve.":"Images are out of date and this Hub can't render them. Run: cmsbot hub render "+it.id;
+    state.replaceChildren(el("div",{class:"note "+(p.up_to_date?"ok":"warn"),text:msg}))}
+  catch(e){state.replaceChildren(el("div",{class:"note bad",text:e.message}))}}
 async function renderInsights(project){$("list").replaceChildren(el("div",{class:"empty",text:project?"Learnings, trends and performance for this project.":"Pick a project."}));const d=$("detail");current=null;if(!project){d.replaceChildren();return}
   const [learn,signals,perf]=await Promise.all([api(`/projects/${project}/learnings`),api(`/projects/${project}/signals`),api(`/projects/${project}/performance`)]);
   const parts=[el("h2",{text:"Proposed changes to how content is made"})];const proposed=learn.filter(l=>l.status==="proposed");

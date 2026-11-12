@@ -53,6 +53,9 @@ same way.**
 | Character account vs brand account | Per channel, recorded in the brand kit and on every item as `persona`, then compared on results | The branded TikTok underperformed; this makes it a measured choice per channel. Disclosure rules still apply |
 | Video stack | Seedance and Grok Imagine through APIs; text and captions rendered by code; no browser automation | Matches the tools available; the browser-driven parts of the reference workflow were its brittle parts |
 | First projects | Micros Tracker, Haidaa, InfiniOffice | Owner's call |
+| Micros blogs and newsletters | Stay in the Micros admin for now; social kinds go through the Hub | Micros already has the email sending and deploy logic |
+| Media files | In a bucket (R2 or S3) or on the Hub's disk, under `<project>/<item>/`; never in the database | Video volumes; one bucket serves all projects |
+| Credentials | Each agent keeps its own; the Hub holds only its tokens and the bucket keys | Agents collaborate through the Hub without sharing secrets |
 
 ## Status
 
@@ -65,6 +68,13 @@ Done in step 1 (this branch):
 - Performance analysis with the four guards.
 - `cmsbot hub` commands, including `push` from existing asset sets.
 - Six skills, container file, docs, tests.
+
+Done in step 2:
+- Carousels in the Hub: renderer in core themed from each brand kit, live preview while reviewing,
+  automatic re-render on save or approve, and a blocker when images are older than the slide text.
+- Media storage: Hub disk by default, any S3-compatible bucket (Cloudflare R2, S3) by configuration;
+  uploads go through the Hub.
+- Per-project access: reviewer and agent tokens can be limited to one project, checked everywhere.
 
 Not done yet, in order:
 
@@ -79,10 +89,11 @@ Not done yet, in order:
 4. **Video renderer.** `cmsbot video render`: storyboard + timing + clips to a captioned 1080x1920
    file (HTML overlays, ffmpeg), plus Seedance and Grok Imagine clip providers with a spend cap.
    The skill describes the method; this makes step 6 of it one command.
-5. **Carousel renderer in core.** Move the Micros renderer here, themed from the brand kit, so
-   every project gets slides; upload media and attach to the item.
-6. **Media storage.** Items hold media URLs. Decide where files live (S3 bucket per project, or the
-   Hub's disk) and add an upload route.
+5. **Hosting on Cloudflare.** Media can go to R2 today. Running the Hub itself there means moving
+   its storage from a SQLite file to D1 and checking the current Workers/Containers options; the
+   storage layer is five methods, so this is contained. Until then any small container host works.
+6. **Photo-backed carousels.** Slides accept a background image; add generation of those images
+   (Grok Imagine) and a second layout, and record `style` so results can be compared.
 7. **Scheduled runs.** Weekly plan, weekly write, daily distribute, weekly analyze, as scheduled
    tasks in the harness already in use. Start in shadow mode: everything drafted, nothing posted.
 8. **Analytics connectors.** Wire the analyze skill to GA4, Mixpanel, Search Console and Ahrefs for

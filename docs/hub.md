@@ -81,6 +81,72 @@ Serve it over HTTPS (the host's built-in TLS is enough). Back up `/data/hub.sqli
 It can run on a laptop while you evaluate it; cloud agents such as Grok Bot can only reach it once
 it has a public HTTPS address.
 
+## Media files
+
+The Hub's database holds text and links. Image, video and audio files go to a storage backend:
+
+| Backend | When | Setup |
+|---|---|---|
+| Hub disk (default) | Evaluating, or small volumes | Nothing. Files sit beside the database and are served at `/media/...` |
+| S3-compatible bucket | Real use, video | Set the variables below on the Hub. Works with Cloudflare R2, AWS S3, Backblaze B2 |
+
+```bash
+CMSBOT_MEDIA_BUCKET=cmsbot-media
+CMSBOT_MEDIA_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+CMSBOT_MEDIA_ACCESS_KEY_ID=...
+CMSBOT_MEDIA_SECRET_ACCESS_KEY=...
+CMSBOT_MEDIA_PUBLIC_URL=https://media.example.com
+```
+
+Files are stored under `<project>/<item id>/`, so one bucket serves every project and a project's
+files can be listed, costed or deleted together. Agents upload through the Hub
+(`cmsbot hub upload <item_id> <file>`), so only the Hub holds bucket keys. File names contain a
+random part: links cannot be guessed, but they are public, because posting APIs have to fetch them.
+Set `CMSBOT_HUB_PUBLIC_URL` so posting agents receive full links when files are on the Hub's disk.
+
+## Carousels
+
+A carousel item's body is a slide spec (see `src/cmsbot/carousel/__init__.py`). Slides are laid out
+as HTML in the project's colours, fonts and wordmark (the `visual` section of its brand kit) and
+screenshotted to 1080x1350 PNGs, so words are always real type.
+
+- Agents: `render_carousel(item_id)` (MCP) or `cmsbot hub render <item_id>`; add `--local` to render
+  on your own machine and upload when the Hub has no browser.
+- Reviewers: the review page shows a live preview while editing slide text. Saving or approving
+  renders the images again. A carousel can't be approved while its images are older than its text.
+- Files only: `cmsbot carousel render spec.json --out slides/ --project-file projects/x.json`.
+
+Rendering needs a headless Chrome on whichever machine renders. The container installs one.
+
+## Who can see what
+
+Every token has a role and, optionally, one project. A token limited to a project can't read or
+change anything in another: items, briefs, signals, learnings, spend and settings are all checked.
+
+```bash
+cmsbot hub token create "dana (haidaa)" --role admin --project haidaa
+```
+
+That reviewer signs in to the same review page and sees only Haidaa. Do the same for agents: a
+Grok Bot that posts for one project gets `--role distributor --project <slug>`. Tokens are stored
+hashed, shown once, and revoked with `cmsbot hub token revoke <id>`; `token list` shows who holds what.
+
+## Where credentials live
+
+Each secret stays with the one party that uses it. The Hub and the repo hold none of the others.
+
+| Secret | Lives in | Never in |
+|---|---|---|
+| Social account logins and API keys (X, Meta, LinkedIn, TikTok) | The posting agent's own secret store (Grok Bot's connected apps and secrets) | The Hub, the repo, a brand kit |
+| Model keys for drafting, images, video | The drafting agent's environment (its environment settings or secret store; a local untracked `.env` for laptop runs) | The Hub, the repo |
+| Analytics access (GA4, Mixpanel, Search Console, Ahrefs) | The analysis agent's connectors (signed in by the owner) | The Hub, the repo |
+| Media bucket keys | The Hub host's environment variables | Any agent |
+| Hub tokens | One per agent, in that agent's secret store | The repo; another agent |
+
+What goes in the repo is only non-secret configuration: account handles, property ids, pillar names.
+The Hub is what lets agents work together without sharing secrets: they exchange drafts, approvals
+and results through it, and each keeps its own keys.
+
 ## Connect agents
 
 MCP endpoint: `https://<your-hub>/mcp`, with the header `Authorization: Bearer <token>`.

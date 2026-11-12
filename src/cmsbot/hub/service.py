@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from cmsbot import carousel
 from cmsbot.hub import stats
 from cmsbot.hub.store import Store, now_iso, parse_iso
 
@@ -87,8 +88,9 @@ def tracked_link(link: str, *, channel: str, campaign: str, item_id: int) -> str
 
 
 class Hub:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, public_url: str = ""):
         self.db = store
+        self.public_url = public_url.rstrip("/")  # so posting agents get fetchable media links
 
     # ---- tokens -------------------------------------------------------------------------
 
@@ -137,6 +139,17 @@ class Hub:
         self._scope(actor, row["project"])
         return row
 
+    def brand(self, project: str) -> dict[str, Any]:
+        row = self._project(project)
+        return {"name": row["name"], **row["brand"]}
+
+    def slides_stale(self, item: dict[str, Any]) -> bool:
+        """True when a carousel's slide images were not made from its current slide text."""
+        if item["kind"] != "carousel" or not item["body"].get("slides"):
+            return False
+        style = carousel.resolve_style(item["body"], self.brand(item["project"]))
+        return (item["audit"].get("render") or {}).get("hash") != carousel.slides_hash(item["body"], style)
+
     def _event(self, actor: Actor, action: str, *, item: dict[str, Any] | None = None, project: str | None = None,
                detail: dict[str, Any] | None = None) -> None:
         self.db.insert("events", {
@@ -150,6 +163,7 @@ class Hub:
                        settings: dict[str, Any] | None = None) -> dict[str, Any]:
         self._require(actor, "admin")
         slug = slugify(slug)
+        self._scope(actor, slug)
         existing = self.db.one("SELECT * FROM projects WHERE slug = ?", (slug,))
         if existing:
             values: dict[str, Any] = {"name": name or existing["name"]}
@@ -320,6 +334,33 @@ class Hub:
         self._event(actor, "edited", item=updated, detail={"fields": sorted(k for k in values if k != "updated_at"), "note": note})
         return self.get_item(actor, item_id)
 
+    def add_media(self, actor: Actor, item_id: int, url: str, *, name: str = "", role: str = "") -> dict[str, Any]:
+        item = self._item(actor, item_id)
+        entry = {"url": url, "name": name, **({"role": role} if role else {})}
+        return self.update_item(actor, item_id, media=[*item["media"], entry], note=f"attached {name or url}")
+
+    def set_render(self, actor: Actor, item_id: int, urls: list[str], *, style: str, render_hash: str) -> dict[str, Any]:
+        """Attach freshly rendered slide images. Rendering changes no words, so a drafting agent may do it
+        while the item is in review; it is refused if the slide text has moved on since the render."""
+        self._require(actor, "admin", "generator")
+        item = self._item(actor, item_id)
+        if item["status"] in ("posting", "published"):
+            raise HubError(f"Item {item_id} is {item['status']}.", 409)
+        if actor.role == "generator" and item["status"] in READY:
+            raise HubError("Already approved; a reviewer must re-render.", 409)
+        current = carousel.slides_hash(item["body"], carousel.resolve_style(item["body"], self.brand(item["project"]), style))
+        if render_hash != current:
+            raise HubError("The slide text changed after these images were rendered; render again.", 409)
+        media = [m for m in item["media"] if not (isinstance(m, dict) and m.get("role") == "slide")]
+        media += [{"url": url, "role": "slide", "name": f"slide-{n:02d}.png"} for n, url in enumerate(urls, start=1)]
+        values: dict[str, Any] = {"media": media, "audit": {**item["audit"], "render": {"style": style, "hash": render_hash}},
+                                  "updated_at": now_iso()}
+        if item["status"] in READY:
+            values.update(status="in_review", approved_hash=None, approved_by=None, approved_at=None)
+        self.db.update("items", "id", item_id, values)
+        self._event(actor, "rendered", item=item, detail={"slides": len(urls), "style": style})
+        return self.get_item(actor, item_id)
+
     def set_claims(self, actor: Actor, item_id: int, claims: list[dict[str, Any]]) -> dict[str, Any]:
         """Replace an anchor's claim ledger. Derivatives restate these instead of making new claims."""
         self._require(actor, "admin", "generator")
@@ -366,6 +407,8 @@ class Hub:
         if content_hash(item) is None:
             out.append("Nothing to post yet.")
         out += [f"Open gap: {gap}" for gap in item["gaps"]]
+        if self.slides_stale(item):
+            out.append("Slide images are missing or older than the slide text; render them again.")
         anchor_id = item["parent_id"] or item["id"]
         claims = self.db.all("SELECT * FROM claims WHERE item_id = ?", (anchor_id,))
         cited = set(item["body"].get("claim_ids") or item["body"].get("claimIds") or []) if item["parent_id"] else None
@@ -389,6 +432,7 @@ class Hub:
         item["changed_since_approval"] = bool(item["approved_hash"]) and item["approved_hash"] != current
         item["claims"] = self.db.all("SELECT * FROM claims WHERE item_id = ? ORDER BY id", (anchor_id,))
         item["blockers"] = self.blockers(item)
+        item["slides_stale"] = self.slides_stale(item)
         item["children"] = self.db.all("SELECT id, kind, channel, title, status FROM items WHERE parent_id = ?", (item_id,))
         item["publications"] = self.db.all("SELECT * FROM publications WHERE item_id = ? ORDER BY id", (item_id,))
         item["events"] = self.db.all("SELECT actor, role, action, detail, at FROM events WHERE item_id = ? ORDER BY id DESC LIMIT 30", (item_id,))
@@ -509,10 +553,20 @@ class Hub:
 
         return {
             "id": item["id"], "project": item["project"], "kind": item["kind"], "channel": item["channel"],
-            "account": item["account"], "title": item["title"], "body": with_tracking(item["body"]), "media": item["media"],
+            "account": item["account"], "title": item["title"], "body": with_tracking(item["body"]), "media": self._absolute_media(item["media"]),
             "link": tracked, "scheduled_at": item["scheduled_at"], "approved_by": item["approved_by"],
             "approved_at": item["approved_at"], "disclosure": (brand.get("disclosure") or {}).get(item["channel"], ""),
         }
+
+    def _absolute_media(self, media: list[Any]) -> list[Any]:
+        base = self.public_url
+        def fix(entry: Any) -> Any:
+            if isinstance(entry, dict) and str(entry.get("url", "")).startswith("/") and base:
+                return {**entry, "url": base + entry["url"]}
+            if isinstance(entry, str) and entry.startswith("/") and base:
+                return base + entry
+            return entry
+        return [fix(m) for m in media]
 
     def ready_to_post(self, actor: Actor, *, project: str | None = None, channel: str | None = None,
                       due_within_hours: float = 24) -> list[dict[str, Any]]:
@@ -670,6 +724,10 @@ class Hub:
 
     def dismiss_signal(self, actor: Actor, signal_id: int) -> None:
         self._require(actor, "admin", "generator")
+        signal = self.db.one("SELECT project FROM signals WHERE id = ?", (signal_id,))
+        if not signal:
+            raise HubError(f"No signal {signal_id}.", 404)
+        self._scope(actor, signal["project"])
         self.db.update("signals", "id", signal_id, {"status": "dismissed"})
 
     def propose_learning(self, actor: Actor, project: str, statement: str, *, scope: dict[str, Any] | None = None,
@@ -685,6 +743,10 @@ class Hub:
         self._require(actor, "admin")
         if status not in ("accepted", "rejected", "retired"):
             raise HubError("status must be accepted, rejected or retired.")
+        learning = self.db.one("SELECT project FROM learnings WHERE id = ?", (learning_id,))
+        if not learning:
+            raise HubError(f"No learning {learning_id}.", 404)
+        self._scope(actor, learning["project"])
         self.db.update("learnings", "id", learning_id, {"status": status, "decided_by": actor.name, "decided_at": now_iso()})
         return self.db.one("SELECT * FROM learnings WHERE id = ?", (learning_id,)) or {}
 

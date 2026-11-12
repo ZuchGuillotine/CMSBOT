@@ -79,3 +79,22 @@ def test_mcp_draft_to_post_loop(ctx):
     assert posted["structuredContent"]["status"] == "published"
     metrics = call(client, tokens["distributor"], "report_metrics", item_id=item, metrics={"impressions": 500, "likes": 9})
     assert metrics["structuredContent"]["recorded"] == {"impressions": 500.0, "likes": 9.0}
+
+
+def test_upload_and_serve_media(tmp_path):
+    from cmsbot.hub.media import LocalStorage
+
+    hub = Hub(Store(":memory:"))
+    admin, gen = hub.create_token("a", "admin"), hub.create_token("g", "generator")
+    with TestClient(create_app(hub=hub, storage=LocalStorage(tmp_path))) as client:
+        client.put("/api/projects/acme", json={"name": "Acme"}, headers=auth(admin))
+        item = client.post("/api/projects/acme/items", headers=auth(gen),
+                           json={"kind": "short_video", "channel": "tiktok", "title": "V", "body": {"hook": "h"}}).json()["id"]
+        up = client.post(f"/api/items/{item}/media?name=clip.mp4&role=video", content=b"\x00\x01", headers=auth(gen))
+        assert up.status_code == 200
+        url = up.json()["media"][0]["url"]
+        assert client.get(url).content == b"\x00\x01"
+        assert client.post(f"/api/items/{item}/media?name=x.sh", content=b"#!", headers=auth(gen)).status_code == 400
+        assert client.get("/media/acme/%2e%2e/%2e%2e/%2e%2e/etc/passwd").status_code in (401, 404)
+        preview = client.post(f"/api/items/{item}/preview", headers=auth(gen))
+        assert preview.status_code == 400  # not a carousel
