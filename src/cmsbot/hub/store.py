@@ -81,6 +81,10 @@ CREATE TABLE IF NOT EXISTS settings (
   id INTEGER PRIMARY KEY, project TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, sealed TEXT NOT NULL,
   hint TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(project, name));
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS jobs (
+  id INTEGER PRIMARY KEY, item_id INTEGER NOT NULL REFERENCES items(id), project TEXT NOT NULL, kind TEXT NOT NULL,
+  status TEXT NOT NULL, result TEXT NOT NULL DEFAULT '{}', error TEXT NOT NULL DEFAULT '', actor TEXT NOT NULL,
+  created_at TEXT NOT NULL, finished_at TEXT);
 """
 # Columns added after the first release: (table, column, definition)
 MIGRATIONS = [
@@ -91,7 +95,7 @@ MIGRATIONS = [
 
 JSON_COLUMNS = {
     "brand", "settings", "keywords", "body", "media", "attributes", "gaps", "audit",
-    "detail", "data", "evidence", "scope",
+    "detail", "data", "evidence", "scope", "result",
 }
 
 

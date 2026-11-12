@@ -30,7 +30,9 @@ from cmsbot.hub.service import (
     HubError,
 )
 from cmsbot.hub import generate as generation
+from cmsbot.hub import jobs
 from cmsbot.hub import render as rendering
+from cmsbot import video
 from cmsbot.hub.media import MAX_UPLOAD_BYTES, MediaError, content_type_for, media_key, storage_from_env
 from cmsbot.hub.store import Store
 
@@ -45,6 +47,36 @@ def _bearer(header: str | None) -> str:
     if header and header.lower().startswith("bearer "):
         return header[7:].strip()
     return ""
+
+
+def _video_summary(item: dict[str, Any]) -> dict[str, Any]:
+    report = item["audit"].get("video") or {}
+    return {"item_id": item["id"], "seconds": report.get("seconds"), "checks": report.get("checks"),
+            "video": next((m["url"] for m in item["media"] if isinstance(m, dict) and m.get("role") == "video"), "")}
+
+
+def _generated_summary(result: dict[str, Any]) -> dict[str, Any]:
+    keep = ("item_id", "shot", "role", "url", "provider", "cost_usd", "cost_is_estimate", "words_timed", "disclosure",
+            "item_remaining_usd")
+    return {k: result[k] for k in keep if k in result}
+
+
+def start_render(hub: Hub, storage, actor: Actor, item_id: int) -> dict[str, Any]:
+    """Carousels render in a few seconds and return the item. Video runs as a job."""
+    if hub.get_item(actor, item_id)["kind"] != "short_video":
+        return rendering.render_item(hub, storage, actor, item_id)
+    return {"job": jobs.start(hub, actor, item_id, "render_video",
+                              lambda: rendering.render_video_item(hub, storage, actor, item_id), _video_summary)}
+
+
+def start_generation(hub: Hub, storage, actor: Actor, item_id: int, what: str, **options: Any) -> dict[str, Any]:
+    if what == "voiceover":
+        generation.precheck_voiceover(hub, actor, item_id, **options)
+        work = lambda: generation.generate_voiceover(hub, storage, actor, item_id, **options)  # noqa: E731
+        return {"job": jobs.start(hub, actor, item_id, "generate_voiceover", work, _generated_summary)}
+    generation.precheck_footage(hub, actor, item_id, **options)
+    work = lambda: generation.generate_footage(hub, storage, actor, item_id, **options)  # noqa: E731
+    return {"job": jobs.start(hub, actor, item_id, f"generate_shot_{int(options['shot']):02d}", work, _generated_summary)}
 
 
 def build_mcp(hub: Hub, storage):
@@ -137,14 +169,16 @@ def build_mcp(hub: Hub, storage):
 
     @tool
     def render_video(item_id: int) -> dict[str, Any]:
-        """Build the captioned 1080x1920 video for a short_video item from its script plus whatever footage and
-        voiceover are attached (roles shot-01..NN, voiceover, timing, music; attach with `cmsbot hub upload`).
-        Shots without footage become branded cards, so this also works as a preview of the script alone.
-        Returns the checks a reviewer will see; fix the ones marked not ok before submitting."""
-        item = rendering.render_video_item(hub, storage, actor(), item_id)
-        report = item["audit"]["video"]
-        return {"id": item["id"], "seconds": report["seconds"], "checks": report["checks"],
-                "video": next(m["url"] for m in item["media"] if isinstance(m, dict) and m.get("role") == "video")}
+        """Start building the captioned 1080x1920 video for a short_video item from its script plus whatever
+        footage and voiceover are attached (roles shot-01..NN, voiceover, timing, music). Shots without footage
+        become branded cards, so this also previews a script alone. Takes a minute or more: this returns a job;
+        call job_status(job_id) until it is done, then read the checks and fix what is not ok before submitting."""
+        return start_render(hub, storage, actor(), item_id)
+
+    @tool
+    def job_status(job_id: int) -> dict[str, Any]:
+        """Status of a render or generation job: running, done (with its result) or failed (with the reason)."""
+        return jobs.get(hub, actor(), job_id)
 
     @tool
     def media_options(item_id: int) -> dict[str, Any]:
@@ -159,15 +193,16 @@ def build_mcp(hub: Hub, storage):
         attach it. Shots are numbered hook=1, then the beats, then the ending. Generate the still first: a video
         then starts from that still, which keeps the look consistent. This spends money: it is refused before the
         script is approved, above the item's media cap, or over the project's budget. Keep words, numbers and
-        logos out of the prompt; text is added by the renderer."""
-        return generation.generate_footage(hub, storage, actor(), item_id, shot=shot, prompt=prompt, kind=kind,
-                                           seconds=seconds, provider=provider)
+        logos out of the prompt; text is added by the renderer. Returns a job; call job_status(job_id) until done."""
+        return start_generation(hub, storage, actor(), item_id, "footage", shot=shot, prompt=prompt, kind=kind,
+                                seconds=seconds, provider=provider)
 
     @tool
     def generate_voiceover(item_id: int, voice_id: str = "") -> dict[str, Any]:
         """Speak an approved video script with the project's voice and attach it with word timings, so captions
-        sync exactly. Use only when the project has no recorded voiceover. Spends money, within the same caps."""
-        return generation.generate_voiceover(hub, storage, actor(), item_id, voice_id=voice_id)
+        sync exactly. Use only when the project has no recorded voiceover. Spends money, within the same caps.
+        Returns a job; call job_status(job_id) until done."""
+        return start_generation(hub, storage, actor(), item_id, "voiceover", voice_id=voice_id)
 
     @tool
     def set_claims(item_id: int, claims: list[dict[str, Any]]) -> dict[str, Any]:
@@ -298,6 +333,7 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
 
     app = FastAPI(title="CMSBOT Hub", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.state.hub = hub
+    jobs.recover(hub)
     setup_attempts = {"left": 10}
     code = hub.setup_code()
     if code:  # a fresh Hub: the first reviewer is created in the browser with this one-time code
@@ -311,6 +347,17 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     @app.exception_handler(MediaError)
     async def media_error(_: Request, exc: MediaError):
         return JSONResponse({"error": str(exc)}, status_code=400)
+
+    def refresh_media(actor: Actor, item_id: int) -> bool:
+        """After a reviewer's edit. Returns True when a video re-render was started and is still running."""
+        item = hub.get_item(actor, item_id)
+        if item["kind"] == "short_video":
+            if item["video_state"] == "stale" and video.can_render():
+                start_render(hub, storage, actor, item_id)
+                return True
+            return bool(item["active_jobs"])
+        rendering.render_if_stale(hub, storage, actor, item_id)
+        return False
 
     def who(authorization: str | None = Header(default=None)) -> Actor:
         found = hub.authenticate(_bearer(authorization))
@@ -429,7 +476,7 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
         changes = {k: body[k] for k in (*item_fields, "scheduled_at", "note") if k in body}
         hub.update_item(actor, item_id, **changes)
         if actor.role == "admin":
-            rendering.render_if_stale(hub, storage, actor, item_id)
+            refresh_media(actor, item_id)
         return hub.get_item(actor, item_id)
 
     @app.post("/api/items/{item_id}/media")
@@ -470,7 +517,11 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
 
     @app.post("/api/items/{item_id}/render")
     def render_slides(item_id: int, actor: Actor = Depends(who)):
-        return rendering.render_any(hub, storage, actor, item_id)
+        return start_render(hub, storage, actor, item_id)
+
+    @app.get("/api/jobs/{job_id}")
+    def get_job(job_id: int, actor: Actor = Depends(who)):
+        return jobs.get(hub, actor, job_id)
 
     @app.get("/api/items/{item_id}/media-options")
     def media_options(item_id: int, actor: Actor = Depends(who)):
@@ -479,11 +530,11 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     @app.post("/api/items/{item_id}/generate")
     def generate(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
         if body.get("what") == "voiceover":
-            return generation.generate_voiceover(hub, storage, actor, item_id, voice_id=body.get("voice_id", ""),
-                                                 provider=body.get("provider", ""))
-        return generation.generate_footage(hub, storage, actor, item_id, shot=int(body.get("shot", 0)),
-                                           prompt=body.get("prompt", ""), kind=body.get("kind", "video"),
-                                           seconds=int(body.get("seconds", 5)), provider=body.get("provider", ""))
+            return start_generation(hub, storage, actor, item_id, "voiceover", voice_id=body.get("voice_id", ""),
+                                    provider=body.get("provider", ""))
+        return start_generation(hub, storage, actor, item_id, "footage", shot=int(body.get("shot", 0)),
+                                prompt=body.get("prompt", ""), kind=body.get("kind", "video"),
+                                seconds=int(body.get("seconds", 5)), provider=body.get("provider", ""))
 
     @app.put("/api/items/{item_id}/render")
     def put_render(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
@@ -508,8 +559,9 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
             changes = {k: body[k] for k in item_fields if k in body}
             if changes:
                 hub.update_item(actor, item_id, note=body.get("note", "") or "reviewer edit", **changes)
-            if actor.role == "admin":
-                rendering.render_if_stale(hub, storage, actor, item_id)
+            if actor.role == "admin" and refresh_media(actor, item_id):
+                raise HubError("Saved. The video is being rendered again with your edits; approve it when that finishes "
+                               "(about a minute).", 409)
             return hub.approve(actor, item_id, scheduled_at=body.get("scheduled_at"))
         if action == "approve-script":
             return hub.approve_script(actor, item_id, body.get("notes", ""))

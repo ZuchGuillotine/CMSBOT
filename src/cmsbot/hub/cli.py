@@ -218,9 +218,18 @@ def hub_render(item_id: int, local: bool) -> None:
     """Render a carousel's slide images, or a short video, and attach the result to the item."""
     remote = Remote()
     if not local:
-        remote.client.timeout = httpx.Timeout(900)
         item = remote.call("POST", f"/items/{item_id}/render")
-        if item["kind"] == "short_video":
+        if "job" in item:
+            import time
+
+            job = item["job"]
+            click.echo(f"#{item_id}: rendering (job {job['id']})...")
+            while job["status"] == "running":
+                time.sleep(5)
+                job = remote.call("GET", f"/jobs/{job['id']}")
+            if job["status"] == "failed":
+                raise click.ClickException(job["error"])
+            item = remote.call("GET", f"/items/{item_id}")
             report = item["audit"]["video"]
             click.echo(f"#{item_id}: {report['seconds']}s video rendered by the Hub.")
             for entry in report["checks"]:

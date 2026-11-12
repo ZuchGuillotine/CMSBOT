@@ -76,6 +76,11 @@ screen text length, pace). Fix anything not ok that you can fix; what you cannot
 goes in `gaps`. Look at the contact sheet for stray text or brand marks in generated footage and
 for realistic generated people. Then `submit_for_review`.
 
+## Long steps are jobs
+`render_video`, `generate_footage` and `generate_voiceover` return a job at once, because they take
+from a minute to several. Call `job_status(job_id)` about every 15 seconds until it says done or
+failed, then continue. Refusals (script not approved, cap reached, no key) come back immediately.
+
 ## Two reviews
 A video is reviewed twice. First the script: the reviewer approves it and the item comes back to
 you as "needs revision" with the note "Script approved. Produce the video". Do not generate footage

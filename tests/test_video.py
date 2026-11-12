@@ -86,7 +86,7 @@ def test_two_stage_review_in_the_hub():
     hub.submit(GEN, item["id"])
     with pytest.raises(HubError) as blocked:
         hub.approve(ADMIN, item["id"])
-    assert "No video yet" in str(blocked.value)
+    assert "Script stage" in str(blocked.value)
     with pytest.raises(HubError):
         hub.approve_script(GEN, item["id"])
     staged = hub.approve_script(ADMIN, item["id"])

@@ -308,9 +308,12 @@ class Hub:
         return {m["role"]: m["url"] for m in item["media"] if isinstance(m, dict) and wanted.fullmatch(str(m.get("role", "")))}
 
     def video_state(self, item: dict[str, Any]) -> str:
-        """'' (not a video), 'script' (no video rendered yet), 'stale' or 'current'."""
+        """'' (not a video), 'script' (words not approved yet, or nothing rendered), 'stale' or 'current'.
+        A preview rendered before the script is approved does not skip the script review."""
         if item["kind"] != "short_video":
             return ""
+        if not item["audit"].get("script_approved"):
+            return "script"
         rendered = (item["audit"].get("video") or {}).get("hash")
         if not rendered or not any(isinstance(m, dict) and m.get("role") == "video" for m in item["media"]):
             return "script"
@@ -559,7 +562,7 @@ class Hub:
             raise HubError("Only video items have a script stage.")
         if item["status"] not in ("in_review", "drafting", "needs_revision"):
             raise HubError(f"Item {item_id} is '{item['status']}'.", 409)
-        blocking = [b for b in self.blockers(item) if not b.startswith("No video yet")]
+        blocking = [b for b in self.blockers(item) if not b.startswith(("Script stage", "Script approved"))]
         if blocking:
             raise HubError("Can't approve the script yet: " + "; ".join(blocking), 409)
         note = "Script approved. Produce the video (footage, voiceover, render) and submit it." + (f" {notes.strip()}" if notes.strip() else "")
@@ -624,7 +627,8 @@ class Hub:
             out.append("Slide images are missing or older than the slide text; render them again.")
         state = self.video_state(item)
         if state == "script":
-            out.append("No video yet. Approve the script to send it to production, or render the video.")
+            out.append("Script stage: approve the script to send it to production." if not item["audit"].get("script_approved")
+                       else "Script approved; the video has not been rendered yet.")
         elif state == "stale":
             out.append("The video is older than the script or footage; render it again.")
         anchor_id = item["parent_id"] or item["id"]
@@ -651,6 +655,7 @@ class Hub:
         item["claims"] = self.db.all("SELECT * FROM claims WHERE item_id = ? ORDER BY id", (anchor_id,))
         item["blockers"] = self.blockers(item)
         item["slides_stale"] = self.slides_stale(item)
+        item["active_jobs"] = self.db.all("SELECT id, kind, created_at FROM jobs WHERE item_id = ? AND status = 'running'", (item_id,))
         item["writing_checks"] = [] if actor.role == "distributor" else self.writing_checks(item)
         item["video_state"] = self.video_state(item)
         item["children"] = self.db.all("SELECT id, kind, channel, title, status FROM items WHERE parent_id = ?", (item_id,))

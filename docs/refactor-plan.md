@@ -93,6 +93,12 @@ Done in step 5:
 - First-run setup with a one-time code, and a workflow that publishes the Hub image, so a new
   user runs one container and configures everything in the browser.
 
+Done in step 6:
+- Writing checks without a model on every draft (limits, banned words, invented experience,
+  figures outside the claims, structure patterns).
+- Rendering and generation run as background jobs with a status call; found on the first live run,
+  where a 70-second render outlived a 30-second proxy limit.
+
 Not done yet, in order:
 
 1. **Stand it up.** Host the Hub, create tokens, connect Claude and Grok Bot. Verify Grok Bot's

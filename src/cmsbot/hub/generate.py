@@ -265,6 +265,38 @@ def _absolute(hub: Hub, url: str) -> str:
     return url
 
 
+def precheck_footage(hub: Hub, actor: Actor, item_id: int, *, shot: int, prompt: str, kind: str = "video",
+                     seconds: int = 5, provider: str = "", **_: Any) -> None:
+    """Everything that can be refused before spending or waiting: raise now, not from inside a job."""
+    item = hub.get_item(actor, item_id)
+    if item["kind"] != "short_video":
+        raise HubError("Footage is generated for short_video items.")
+    if not 1 <= int(shot) <= len(video.normalize(item["body"])):
+        raise HubError(f"This script has shots 1 to {len(video.normalize(item['body']))}.")
+    if kind not in ("video", "image"):
+        raise HubError("kind must be 'video' or 'image'.")
+    if not prompt.strip():
+        raise HubError("Write the prompt for this shot.")
+    cfg = _config(hub, item["project"])
+    _, spec = _pick(cfg, kind, provider)
+    _authorise(hub, actor, item, round(spec["estimate"](cfg, max(2, min(int(seconds), MAX_CLIP_SECONDS)), 0), 4))
+
+
+def precheck_voiceover(hub: Hub, actor: Actor, item_id: int, *, voice_id: str = "", provider: str = "", **_: Any) -> None:
+    item = hub.get_item(actor, item_id)
+    if item["kind"] != "short_video":
+        raise HubError("Voiceover is generated for short_video items.")
+    brand = hub.brand(item["project"])
+    chosen = voice_id or ((brand.get("voiceover") or {}).get("voice_id") if isinstance(brand.get("voiceover"), dict) else "") \
+        or hub.setting("ELEVENLABS_VOICE_ID", item["project"])
+    if not chosen:
+        raise HubError("No voice chosen. A reviewer can set the ElevenLabs voice id under Settings.")
+    cfg = _config(hub, item["project"])
+    _, spec = _pick(cfg, "voice", provider)
+    text = " ".join(s["narration"] for s in video.normalize(item["body"]) if s["narration"])
+    _authorise(hub, actor, item, round(spec["estimate"](cfg, 0, len(text)), 4))
+
+
 def generate_footage(hub: Hub, storage, actor: Actor, item_id: int, *, shot: int, prompt: str, kind: str = "video",
                      seconds: int = 5, provider: str = "", from_still: bool = True) -> dict[str, Any]:
     """Generate the clip or still for one shot and attach it as shot-NN. A video starts from the shot's
