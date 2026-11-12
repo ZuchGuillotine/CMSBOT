@@ -254,3 +254,21 @@ def test_plan_asset_set_maps_anchor_and_derivatives(tmp_path):
     assert plan[0]["claims"][0]["citation_url"] == "https://u"
     assert plan[1]["body"]["posts"] == ["see https://site/blog/x"]
     assert plan[1]["external_ref"] == "2026-11-10-mag:thread:1"
+
+
+def test_writing_checks_flag_objective_problems(hub):
+    hub.upsert_project(ADMIN, "micros", "Micros", brand={"lexicon": {"avoid": ["game-changing", "unlock"]}})
+    anchor = draft(hub, kind="blog", channel="blog", body={"markdown": "x"})
+    hub.set_claims(GEN, anchor["id"], [{"text": "A review pooled 3 trials with 151 adults.", "citation": "Mah 2021"}])
+    long_post = "This game-changing mineral helped my client sleep 47% longer. " + "word " * 60
+    child = draft(hub, parent_id=anchor["id"], body={"posts": ["151 adults, three trials. https://example.com/" + "a" * 300, long_post],
+                                                      "claim_ids": ["L1"]})
+    found = {c["check"]: c for c in child["writing_checks"]}
+    assert found["length"]["detail"].startswith("Post 2 is") and found["length"]["level"] == "fix"
+    assert "game-changing" in found["brand words"]["detail"]
+    assert "47%" in found["figures"]["detail"] and "151" not in found["figures"]["detail"]
+    assert "invented experience" in found
+    hub.submit(GEN, child["id"])
+    assert any("Post 2 is" in b for b in hub.get_item(ADMIN, child["id"])["blockers"])  # over the limit blocks approval
+    clean = draft(hub, parent_id=anchor["id"], body={"posts": ["A review pooled 3 trials."], "claim_ids": ["L1"]})
+    assert [c for c in clean["writing_checks"] if c["level"] == "fix"] == []

@@ -25,7 +25,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from cmsbot import carousel, video
-from cmsbot.hub import stats
+from cmsbot.hub import checks, stats
 from cmsbot.hub.store import Store, now_iso, parse_iso
 from cmsbot.hub.vault import Vault
 
@@ -610,11 +610,16 @@ class Hub:
             self.db.update("claims", "id", claim_id, values)
         return self.db.one("SELECT * FROM claims WHERE id = ?", (claim_id,)) or {}
 
+    def writing_checks(self, item: dict[str, Any]) -> list[dict[str, str]]:
+        claims = self.db.all("SELECT * FROM claims WHERE item_id = ?", (item["parent_id"] or item["id"],))
+        return checks.run(item, claims, self.brand(item["project"]), POST_LIMITS.get(item["channel"]))
+
     def blockers(self, item: dict[str, Any]) -> list[str]:
         out: list[str] = []
         if content_hash(item) is None:
             out.append("Nothing to post yet.")
         out += [f"Open gap: {gap}" for gap in item["gaps"]]
+        out += [c["detail"] for c in self.writing_checks(item) if c["check"] == "length"]
         if self.slides_stale(item):
             out.append("Slide images are missing or older than the slide text; render them again.")
         state = self.video_state(item)
@@ -646,6 +651,7 @@ class Hub:
         item["claims"] = self.db.all("SELECT * FROM claims WHERE item_id = ? ORDER BY id", (anchor_id,))
         item["blockers"] = self.blockers(item)
         item["slides_stale"] = self.slides_stale(item)
+        item["writing_checks"] = [] if actor.role == "distributor" else self.writing_checks(item)
         item["video_state"] = self.video_state(item)
         item["children"] = self.db.all("SELECT id, kind, channel, title, status FROM items WHERE parent_id = ?", (item_id,))
         item["publications"] = self.db.all("SELECT * FROM publications WHERE item_id = ? ORDER BY id", (item_id,))

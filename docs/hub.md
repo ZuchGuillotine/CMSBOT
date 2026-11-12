@@ -85,6 +85,23 @@ Optional environment variables: `CMSBOT_HUB_SECRET_KEY` (supply the encryption k
 of the generated file, for example from a secret manager), the `CMSBOT_MEDIA_*` bucket settings
 below, and provider keys by name as a fallback when nothing is saved in Settings.
 
+## Writing quality
+
+Text is drafted by the agent the project already uses, following `skills/cmsbot-write`, so the Hub
+needs no text-model key. What keeps drafts from reading as machine-written is split in two:
+
+- **Method, in the skill:** gather real material first, decide the shape before the sentences, and
+  avoid the structural habits listed there. Rewording afterwards changes little.
+- **Checks, in the Hub (`check_draft`, and shown on every item):** platform length limits, the
+  brand's banned words (`lexicon.avoid` in the brand kit), invented first-person experience, figures
+  that are not in the anchor's verified claims, and measured patterns such as a closing that restates
+  the opening or contrast frames. Items marked "fix" are objective; "note" items are for a person
+  to judge. Only an over-length post blocks approval.
+
+The older API pipeline (`cmsbot generate --method multipass`, `cmsbot derive`) still exists for
+unattended runs. It reads Anthropic, OpenAI or Gemini keys from its own environment, not from the
+Hub, and sends its output with `cmsbot hub push`.
+
 ## Media files
 
 The Hub's database holds text and links. Image, video and audio files go to a storage backend:

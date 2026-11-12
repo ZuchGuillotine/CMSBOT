@@ -178,7 +178,18 @@ def build_mcp(hub: Hub, storage):
     def submit_for_review(item_id: int) -> dict[str, Any]:
         """Hand a finished draft to the reviewer. You can't edit it again unless they request changes."""
         item = hub.submit(actor(), item_id)
-        return {"id": item["id"], "status": item["status"], "blockers": item["blockers"]}
+        fixes = [c for c in item["writing_checks"] if c["level"] == "fix"]
+        return {"id": item["id"], "status": item["status"], "blockers": item["blockers"], "writing_checks": item["writing_checks"],
+                "advice": "Submitted. " + (f"{len(fixes)} check(s) marked 'fix' will be shown to the reviewer; next time call "
+                                           "check_draft and correct them before submitting." if fixes else "No objective problems found.")}
+
+    @tool
+    def check_draft(item_id: int) -> dict[str, Any]:
+        """Run the writing checks on a saved draft before submitting: platform length limits, the brand's banned
+        words, invented first-person experience, figures missing from the verified claims, and measurable
+        machine-writing patterns. Correct everything marked 'fix'; treat 'note' items as a prompt to re-read."""
+        item = hub.get_item(actor(), item_id)
+        return {"id": item["id"], "writing_checks": item["writing_checks"], "blockers": item["blockers"]}
 
     @tool
     def report_failure(item_id: int, error: str) -> dict[str, Any]:

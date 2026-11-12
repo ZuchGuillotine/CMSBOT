@@ -24,11 +24,23 @@ cannot do what the note asks, `report_failure` with the reason.
 4. Write it. `save_draft(kind="blog", channel="blog", body={"markdown": ...}, gaps=[...])`.
 5. `set_claims(item_id, [{text, citation, citation_url}])`: every factual claim a derivative might
    repeat, one per entry. The reviewer verifies each once, here.
-6. Re-read against the brand kit: banned words, disallowed claims, no first-person experience that
-   nobody had. Fix, then `submit_for_review`.
+6. `check_draft(item_id)`. Correct everything marked "fix" (length, banned words, invented
+   experience, figures outside the claims) and save again. "note" items are measured patterns
+   (a closing that restates the opening, announcing what the piece will do, contrast frames, generic
+   phrases); fix them by changing the structure, not by swapping words. Then `submit_for_review`.
+
+## What makes text read as machine-written
+It is mostly shape, decided before the first sentence, and rewording afterwards barely helps.
+Avoid: an opening that announces the topic; three parallel points of equal length; every paragraph
+ending on a tidy summary line; "it's not X, it's Y"; a closing that restates the opening; hedges and
+intensifiers standing in for a fact; a balanced "on the other hand" where the evidence is not
+balanced. Prefer: starting with the most specific thing you have; uneven sections sized by how much
+there is to say; a named source, number or example in place of a general claim; ending when the
+last useful thing has been said. If the harness has a long-form writing skill installed (for
+example `multipass-writing`), use it for anchors and apply this file for the Hub steps.
 
 ## Derivatives
-One `save_draft` per piece with `parent_id` = the anchor. State only facts from the anchor's claims
+One `save_draft` per piece with `parent_id` = the anchor. Run `check_draft` on each before submitting. State only facts from the anchor's claims
 and list them in `body.claim_ids` (`"L1"` is the first claim). Write for the channel, not a resize:
 
 | kind / channel | body |
