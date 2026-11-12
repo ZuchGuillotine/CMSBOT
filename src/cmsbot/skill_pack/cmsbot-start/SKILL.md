@@ -10,8 +10,10 @@ copy, posts, results, costs and the methods (skills) used to make them. People r
 page. Agents work through its tools. You are one of several agents; none of you shares keys or
 memory, and the Hub is how work passes between you.
 
-## First three calls, every session
-1. `list_projects()`: which projects your token covers.
+## First calls, every session
+1. `whoami()`: your role, the projects your token covers, what you may and may not do, and your
+   tools. Your tool list is your scope: if a tool is not in it, that job belongs to another agent
+   or to the reviewer. Do not try to do it another way.
 2. `whats_due(project)`: what needs doing now, and by which role. Do what is listed for your role.
    Do not invent work that is not due.
 3. `list_skills(project)`, then `get_skill(name, project)` for the task in front of you. The Hub's

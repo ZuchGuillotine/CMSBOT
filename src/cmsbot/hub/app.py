@@ -85,6 +85,39 @@ def start_generation(hub: Hub, storage, actor: Actor, item_id: int, what: str, *
     return {"job": jobs.start(hub, actor, item_id, f"generate_shot_{int(options['shot']):02d}", work, _generated_summary)}
 
 
+EVERYONE = {"whoami", "whats_due", "log_run", "list_skills", "get_skill", "list_projects"}
+ROLE_TOOLS: dict[str, set[str]] = {
+    "generator": EVERYONE | {
+        "get_brief", "create_cluster", "list_items", "get_item", "save_draft", "check_draft", "set_claims", "submit_for_review",
+        "report_failure", "render_carousel", "render_video", "job_status", "media_options", "generate_footage", "generate_voiceover",
+        "import_published", "get_series", "plan_series", "propose_brand", "record_cost", "propose_learning", "submit_signal",
+        "performance", "propose_skill_change"},
+    "distributor": EVERYONE | {"ready_to_post", "claim_post", "release_post", "mark_posted", "report_metrics", "submit_signal", "record_cost"},
+    "analyst": EVERYONE | {
+        "get_brief", "list_items", "get_item", "get_series", "ready_to_post", "report_metrics", "report_conversions", "submit_signal",
+        "record_cost", "performance", "propose_learning", "propose_skill_change", "propose_brand"},
+}
+ROLE_SUMMARY = {
+    "generator": ("Drafting agent.", "Plan, draft, revise, render, generate media and submit for review.",
+                  "Approve, post, or change a piece once it is with the reviewer."),
+    "distributor": ("Posting agent.", "See approved copy that is due, claim it, post it exactly, record the post, report its numbers and trends.",
+                    "See or edit drafts, or post anything the Hub did not hand you."),
+    "analyst": ("Analysis agent.", "Read everything, bring in results, read the performance report, propose learnings and skill changes.",
+                "Draft, post, or change a method directly."),
+    "agent": ("All-round agent.", "Every agent job: drafting, posting approved copy, reporting numbers, analysis and proposals.",
+              "Approve, verify claims, change settings or access. Post only what claim_post returns, never a draft from memory."),
+    "admin": ("Reviewer.", "Everything, including approving.", "Nothing is withheld; this token belongs to a person."),
+}
+
+
+def tools_for(role: str, every_tool: set[str]) -> set[str]:
+    if role == "admin":
+        return every_tool
+    if role == "agent":
+        return set().union(*ROLE_TOOLS.values()) & every_tool
+    return ROLE_TOOLS.get(role, EVERYONE) & every_tool
+
+
 def build_mcp(hub: Hub, storage, do_import=None):
     from mcp.server.mcpserver import MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
@@ -95,8 +128,9 @@ def build_mcp(hub: Hub, storage, do_import=None):
         log_level="WARNING",
         instructions=(
             "CMSBOT Hub holds the content state for every project: plans, drafts, review status, approved copy, "
-            "posts, metrics, costs, learnings and the skills (written methods) agents follow. New here? Call "
-            "get_skill('cmsbot-start') first. Each session: whats_due(project), then get_skill for the task, then "
+            "posts, metrics, costs, learnings and the skills (written methods) agents follow. Your token has a role "
+            "and a project scope that decide which tools you see: call whoami first to learn them. New here? Then "
+            "get_skill('cmsbot-start'). Each session: whats_due(project), then get_skill for the task, then "
             "get_brief for the project. Drafting agents save drafts "
             "and submit them; only a person approves. Posting agents call ready_to_post, claim_post, post exactly "
             "the returned copy, then mark_posted and later report_metrics. Never post anything that did not come "
@@ -110,15 +144,34 @@ def build_mcp(hub: Hub, storage, do_import=None):
             raise HubError("Missing or invalid Hub token.", 401)
         return current
 
+    registered: list[str] = []
+
     def tool(fn):
+        registered.append(fn.__name__)
+
         @functools.wraps(fn)
         def wrapped(*args, **kwargs):
+            me = _actor.get()
+            if me is not None and fn.__name__ not in tools_for(me.role, set(registered)):
+                raise ToolError(f"The tool {fn.__name__} is not part of the {me.role} role. Call whoami to see what this token can do.")
             try:
                 return fn(*args, **kwargs)
             except HubError as exc:  # show the agent the reason, not a generic crash
                 raise ToolError(str(exc)) from exc
 
         return server.tool()(wrapped)
+
+    @tool
+    def whoami() -> dict[str, Any]:
+        """Who this connection is: the token's name, its role, which projects it covers, what that role may and may
+        not do, and the tools available to it. Call this first, so you know your scope before you plan any work."""
+        me = actor()
+        title, can, cannot = ROLE_SUMMARY[me.role]
+        return {"name": me.name, "role": me.role, "role_means": title, "you_can": can, "you_cannot": cannot,
+                "projects": [p["slug"] for p in hub.list_projects(me)],
+                "limited_to_project": me.project or None,
+                "your_tools": sorted(tools_for(me.role, set(registered))),
+                "next": "Call get_skill('cmsbot-start') if you have not worked with this Hub before, then whats_due(project)."}
 
     @tool
     def whats_due(project: str) -> dict[str, Any]:
@@ -367,6 +420,19 @@ def build_mcp(hub: Hub, storage, do_import=None):
                          evidence: dict[str, Any] | None = None) -> dict[str, Any]:
         """Propose a change to how content is made, with the evidence. It takes effect only after a person accepts it."""
         return hub.propose_learning(actor(), project, statement, scope=scope, evidence=evidence)
+
+    list_all = server.list_tools
+
+    async def list_for_role():
+        """Each token is shown only the tools its role can use, so an agent's tool list is its scope."""
+        me = _actor.get()
+        tools = await list_all()
+        if me is None:
+            return tools
+        allowed = tools_for(me.role, set(registered))
+        return [t for t in tools if t.name in allowed]
+
+    server.list_tools = list_for_role  # type: ignore[method-assign]
 
     inner = server.streamable_http_app(
         streamable_http_path="/mcp", stateless_http=True, json_response=True,

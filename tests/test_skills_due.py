@@ -166,6 +166,6 @@ def test_skills_and_due_over_http_and_mcp(hub):
 
         listed = call("list_skills", project="acme")["structuredContent"]["result"]
         assert listed[0]["name"] == "cmsbot-start" and any(s["name"] == "reddit-replies" for s in listed)
-        assert "First three calls" in call("get_skill", name="cmsbot-start")["structuredContent"]["body"]
+        assert "First calls" in call("get_skill", name="cmsbot-start")["structuredContent"]["body"]
         assert call("whats_due", project="acme")["structuredContent"]["for_you"][0]["task"] == "plan"
         assert call("log_run", project="acme", task="plan", summary="done")["structuredContent"]["recorded"] is True

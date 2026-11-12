@@ -280,6 +280,10 @@ project. Tokens are stored hashed, shown once, can expire, and show when they we
 | distributor | see approved copy that is due, claim it, record the post, report numbers and trends | see or edit drafts |
 | analyst | read everything, report results, propose learnings and skill changes | draft, post |
 
+An agent learns its scope from the connection itself: it is shown only the tools its role can use,
+and `whoami` returns its name, role, the projects it covers, what it may and may not do, and its tool
+list. A tool outside the role is refused even if called by name.
+
 Use **agent** when one agent does all the work. Use the narrow roles when different agents (or
 vendors) do different jobs: a distributor has never seen an unapproved draft, so it cannot post
 one by mistake. No agent role can approve.

@@ -65,7 +65,9 @@ def test_mcp_requires_a_token(ctx):
 def test_mcp_draft_to_post_loop(ctx):
     client, tokens = ctx
     names = {t["name"] for t in rpc(client, tokens["generator"], "tools/list").json()["result"]["tools"]}
-    assert {"get_brief", "save_draft", "submit_for_review", "ready_to_post", "claim_post", "mark_posted", "report_metrics"} <= names
+    assert {"get_brief", "save_draft", "submit_for_review"} <= names
+    posting = {t["name"] for t in rpc(client, tokens["distributor"], "tools/list").json()["result"]["tools"]}
+    assert {"ready_to_post", "claim_post", "mark_posted", "report_metrics"} <= posting
     saved = call(client, tokens["generator"], "save_draft", project="micros", kind="post", channel="linkedin",
                  title="P", body={"text": "hello"})
     item = saved["structuredContent"]["id"]
@@ -98,3 +100,29 @@ def test_upload_and_serve_media(tmp_path):
         assert client.get("/media/acme/%2e%2e/%2e%2e/%2e%2e/etc/passwd").status_code in (401, 404)
         preview = client.post(f"/api/items/{item}/preview", headers=auth(gen))
         assert preview.status_code == 400  # not a carousel
+
+
+def test_each_role_sees_only_its_tools_and_is_told_its_scope():
+    from cmsbot.hub.app import ROLE_TOOLS, tools_for
+
+    hub = Hub(Store(":memory:"))
+    tokens = {role: hub.create_token(f"{role}-1", role) for role in ("admin", "agent", "generator", "distributor", "analyst")}
+    with TestClient(create_app(hub=hub)) as client:
+        client.put("/api/projects/acme", json={"name": "Acme"}, headers=auth(tokens["admin"]))
+        client.put("/api/projects/other", json={"name": "Other"}, headers=auth(tokens["admin"]))
+        scoped = hub.create_token("grok-acme", "distributor", "acme")
+        seen = {role: {t["name"] for t in rpc(client, token, "tools/list").json()["result"]["tools"]} for role, token in tokens.items()}
+        everything = seen["admin"]
+        assert set().union(*ROLE_TOOLS.values()) <= everything, "a tool named in ROLE_TOOLS does not exist"
+        assert everything == set().union(*ROLE_TOOLS.values()), "a new tool has no role assigned; add it to ROLE_TOOLS"
+        assert seen["distributor"] == tools_for("distributor", everything)
+        assert not seen["distributor"] & {"save_draft", "list_items", "get_item", "get_brief", "generate_footage"}
+        assert not seen["generator"] & {"claim_post", "mark_posted", "ready_to_post"}
+        assert not seen["analyst"] & {"save_draft", "claim_post", "generate_footage"}
+        assert seen["agent"] == seen["generator"] | seen["distributor"] | seen["analyst"]
+        me = call(client, scoped, "whoami")["structuredContent"]
+        assert (me["name"], me["role"], me["projects"], me["limited_to_project"]) == ("grok-acme", "distributor", ["acme"], "acme")
+        assert "claim_post" in me["your_tools"] and "save_draft" not in me["your_tools"] and "See or edit drafts" in me["you_cannot"]
+        hidden = call(client, tokens["distributor"], "save_draft", project="acme", kind="post", channel="x", title="t", body={"text": "x"})
+        assert hidden["isError"] and "not part of the distributor role" in hidden["content"][0]["text"]
+        assert call(client, tokens["agent"], "whoami")["structuredContent"]["projects"] == ["acme", "other"]
