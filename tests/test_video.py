@@ -76,7 +76,8 @@ def test_overlay_html_escapes_and_uses_brand():
     theme = video.carousel.resolve_theme({"name": "Acme", "visual": {"colors": {"accent": "#ff0000"}}})
     shot = {**video.normalize({"hook": "<script>x</script>"})[0]}
     page = video.overlay_html(shot, theme, source="Src", card=True)
-    assert "&lt;script&gt;" in page and "<script>x" not in page and "--accent:#ff0000" in page and "frame card" in page
+    assert "&lt;script&gt;" in page and "<script>x" not in page and "frame card" in page
+    assert "--accent:#ff0000" in video._sheet(theme, [page]) and "display=block" not in video._sheet(theme, [page])
 
 
 def test_two_stage_review_in_the_hub():
@@ -126,3 +127,12 @@ def test_render_end_to_end(tmp_path):
     saved = json.loads((tmp_path / "out" / "render.json").read_text())
     assert saved["hash"] == video.storyboard_hash(BODY)
     assert not (tmp_path / "out" / "work").exists()
+    # captions must be on screen in every captioned shot, including after real footage: measure, don't assume
+    from PIL import Image
+    for chunk in report["captions"]:
+        frame = tmp_path / f"c{chunk['shot']}.png"
+        middle = (chunk["start"] + chunk["end"]) / 2
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", f"{middle:.2f}", "-i", str(report["video"]), "-frames:v", "1", str(frame)], check=True)
+        with Image.open(frame) as image:
+            band = image.convert("L").crop((84, 1080, 910, 1310))
+            assert band.getextrema()[1] > 200, f"no caption visible at {middle:.1f}s"

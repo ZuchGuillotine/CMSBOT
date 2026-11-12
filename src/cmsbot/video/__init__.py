@@ -21,7 +21,6 @@ import json
 import re
 import shutil
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -214,11 +213,52 @@ for _token, _px in (("OVERLAY", OVERLAY_FONT_PX), ("HOOK", OVERLAY_FONT_PX + 20)
     _CSS = _CSS.replace(f"@{_token}@", str(_px))
 
 
-def _document(theme: dict[str, Any], classes: str, inner: str) -> str:
+SHEET_FRAMES = 6  # frames drawn per browser pass; keeps the screenshot under Chrome's size limit
+
+
+def _frame(classes: str, inner: str) -> str:
+    return f'<div class="frame {classes}">{inner}</div>'
+
+
+def _sheet(theme: dict[str, Any], frames: list[str]) -> str:
+    """Several frames stacked in one page, so fonts load once and every frame is drawn the same way."""
     variables = ";".join([*(f"--{k}:{v}" for k, v in theme["colors"].items()),
                           *(f"--font-{k}:{v}" for k, v in theme["fonts"].items())])
-    return (f'<!DOCTYPE html><html><head><meta charset="utf-8"><link href="{esc(theme["font_css"])}" rel="stylesheet">'
-            f"<style>:root{{{variables}}}{_CSS}</style></head><body><div class=\"frame {classes}\">{inner}</div></body></html>")
+    fonts = theme["font_css"].replace("display=block", "display=swap")  # never leave text invisible waiting for a font
+    css = _CSS.replace("html,body{width:1080px;height:1920px;", "html,body{width:1080px;")
+    return (f'<!DOCTYPE html><html><head><meta charset="utf-8"><link href="{esc(fonts)}" rel="stylesheet">'
+            f"<style>:root{{{variables}}}{css}</style></head><body>{''.join(frames)}</body></html>")
+
+
+def _document(theme: dict[str, Any], classes: str, inner: str) -> str:
+    return _sheet(theme, [_frame(classes, inner)])
+
+
+def draw_frames(chrome: str, theme: dict[str, Any], frames: list[tuple[str, Path, bool]], work: Path) -> None:
+    """frames: (html, png path, must_have_text). Draws them a sheet at a time and checks none came out blank."""
+    from PIL import Image
+
+    for start in range(0, len(frames), SHEET_FRAMES):
+        batch = frames[start:start + SHEET_FRAMES]
+        page = work / f"sheet-{start:03d}.html"
+        shot = page.with_suffix(".png")
+        for attempt in (1, 2):
+            page.write_text(_sheet(theme, [html for html, _, _ in batch]), encoding="utf-8")
+            carousel.screenshot(chrome, page, shot, width=WIDTH, height=HEIGHT * len(batch), transparent=True)
+            with Image.open(shot) as sheet:
+                sheet = sheet.convert("RGBA")
+                if sheet.size != (WIDTH, HEIGHT * len(batch)):
+                    raise VideoError(f"The browser drew a {sheet.size[0]}x{sheet.size[1]} sheet; expected {WIDTH}x{HEIGHT * len(batch)}.")
+                blank = []
+                for index, (_, target, must_have_text) in enumerate(batch):
+                    frame = sheet.crop((0, HEIGHT * index, WIDTH, HEIGHT * (index + 1)))
+                    if must_have_text and frame.getchannel("A").getbbox() is None:
+                        blank.append(target.name)
+                    frame.save(target)
+            if not blank:
+                break
+            if attempt == 2:
+                raise VideoError(f"The browser drew no text for {', '.join(blank)}. Nothing was assembled; render again.")
 
 
 def overlay_html(shot: dict[str, Any], theme: dict[str, Any], *, source: str = "", card: bool = False) -> str:
@@ -229,11 +269,11 @@ def overlay_html(shot: dict[str, Any], theme: dict[str, Any], *, source: str = "
     block = (f'<div class="overlay {esc(shot["kind"])}"><div class="rule"></div><div class="text">{esc(text)}</div></div>'
              if text else "")
     foot = f'<div class="source">{esc(source)}</div>' if source else ""
-    return _document(theme, "card" if card else "scrim", brand + block + foot)
+    return _frame("card" if card else "scrim", brand + block + foot)
 
 
 def caption_html(text: str, theme: dict[str, Any]) -> str:
-    return _document(theme, "", f'<div class="caption"><span>{esc(text)}</span></div>')
+    return _frame("", f'<div class="caption"><span>{esc(text)}</span></div>')
 
 
 # ---- ffmpeg ---------------------------------------------------------------------------------
@@ -323,18 +363,13 @@ def render(body: dict[str, Any], brand: dict[str, Any] | None, out_dir: Path, *,
     theme = carousel.resolve_theme(brand, body.get("theme") if isinstance(body.get("theme"), str) else None)
     source = str(body.get("on_screen_source") or "")
 
-    jobs: list[tuple[Path, Path, bool]] = []  # (html, png, transparent)
+    frames: list[tuple[str, Path, bool]] = []  # (html, png, must contain text)
     for shot in timing["shots"]:
         card = shot["role"] not in assets
-        page = work / f"overlay-{shot['number']:02d}.html"
-        page.write_text(overlay_html(shot, theme, source=source, card=card), encoding="utf-8")
-        jobs.append((page, page.with_suffix(".png"), not card))
+        frames.append((overlay_html(shot, theme, source=source, card=card), work / f"overlay-{shot['number']:02d}.png", False))
     for index, chunk in enumerate(captions):
-        page = work / f"caption-{index:03d}.html"
-        page.write_text(caption_html(chunk["text"], theme), encoding="utf-8")
-        jobs.append((page, page.with_suffix(".png"), True))
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(lambda job: carousel.screenshot(chrome, job[0], job[1], width=WIDTH, height=HEIGHT, transparent=job[2]), jobs))
+        frames.append((caption_html(chunk["text"], theme), work / f"caption-{index:03d}.png", True))
+    draw_frames(chrome, theme, frames, work)
 
     segments = []
     for shot in timing["shots"]:
@@ -357,13 +392,10 @@ def render(body: dict[str, Any], brand: dict[str, Any] | None, out_dir: Path, *,
             command += ["-i", str(assets[role])] if role == "voiceover" else ["-stream_loop", "-1", "-i", str(assets[role])]
     if not audio_inputs:  # platforms reject files with no audio track
         command += ["-f", "lavfi", "-t", total, "-i", "anullsrc=r=44100:cl=stereo"]
-    graph, last = [], "0:v"
+    graph, last = [f"[0:v]setpts=N/({FPS}*TB)[base]"], "base"
     for index, chunk in enumerate(captions):
         graph.append(f"[{last}][{index + 1}:v]overlay=0:0:enable='between(t,{chunk['start']:.3f},{chunk['end']:.3f})'[v{index}]")
         last = f"v{index}"
-    if not graph:
-        graph.append("[0:v]null[vout]")
-        last = "vout"
     if len(audio_inputs) == 2:
         graph.append(f"[{audio_inputs[1][1]}:a]volume={MUSIC_VOLUME}[bed];[{audio_inputs[0][1]}:a][bed]amix=inputs=2:duration=first:normalize=0[aout]")
         audio_map = "[aout]"

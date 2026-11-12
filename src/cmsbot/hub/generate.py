@@ -115,7 +115,8 @@ def seedance_video(prompt: str, *, cfg: Config, seconds: int, first_frame_url: s
             if not names:
                 raise ProviderError("OpenRouter lists no Seedance video model; set CMSBOT_SEEDANCE_MODEL.")
             model = names[0]
-        body: dict[str, Any] = {"model": model, "prompt": prompt, "duration": seconds, "aspect_ratio": "9:16",
+        # No generated sound: the renderer adds voice and music, and model audio trips provider content filters.
+        body: dict[str, Any] = {"model": model, "prompt": prompt, "duration": seconds, "aspect_ratio": "9:16", "generate_audio": False,
                                 "resolution": os.environ.get("CMSBOT_SEEDANCE_RESOLUTION", "720p")}
         if first_frame_url:
             body["frame_images"] = [{"type": "image_url", "image_url": {"url": first_frame_url}, "frame_type": "first_frame"}]
