@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from cmsbot import carousel
+from cmsbot import carousel, video
 from cmsbot.hub import stats
 from cmsbot.hub.store import Store, now_iso, parse_iso
 
@@ -149,6 +149,21 @@ class Hub:
             return False
         style = carousel.resolve_style(item["body"], self.brand(item["project"]))
         return (item["audit"].get("render") or {}).get("hash") != carousel.slides_hash(item["body"], style)
+
+    @staticmethod
+    def video_assets(item: dict[str, Any]) -> dict[str, str]:
+        """Footage and sound attached to a video item, by role (shot-01, voiceover, music, timing)."""
+        wanted = re.compile(r"shot-\d{2}|voiceover|music|timing")
+        return {m["role"]: m["url"] for m in item["media"] if isinstance(m, dict) and wanted.fullmatch(str(m.get("role", "")))}
+
+    def video_state(self, item: dict[str, Any]) -> str:
+        """'' (not a video), 'script' (no video rendered yet), 'stale' or 'current'."""
+        if item["kind"] != "short_video":
+            return ""
+        rendered = (item["audit"].get("video") or {}).get("hash")
+        if not rendered or not any(isinstance(m, dict) and m.get("role") == "video" for m in item["media"]):
+            return "script"
+        return "current" if rendered == video.storyboard_hash(item["body"], self.video_assets(item)) else "stale"
 
     def _event(self, actor: Actor, action: str, *, item: dict[str, Any] | None = None, project: str | None = None,
                detail: dict[str, Any] | None = None) -> None:
@@ -361,6 +376,48 @@ class Hub:
         self._event(actor, "rendered", item=item, detail={"slides": len(urls), "style": style})
         return self.get_item(actor, item_id)
 
+    def set_video(self, actor: Actor, item_id: int, video_url: str, *, contact_sheet_url: str = "",
+                  report: dict[str, Any]) -> dict[str, Any]:
+        """Attach a rendered video. Refused if the script or footage changed since it was rendered."""
+        self._require(actor, "admin", "generator")
+        item = self._item(actor, item_id)
+        if item["status"] in ("posting", "published"):
+            raise HubError(f"Item {item_id} is {item['status']}.", 409)
+        if actor.role == "generator" and item["status"] in READY:
+            raise HubError("Already approved; a reviewer must re-render.", 409)
+        if report.get("hash") != video.storyboard_hash(item["body"], self.video_assets(item)):
+            raise HubError("The script or footage changed after this video was rendered; render again.", 409)
+        media = [m for m in item["media"] if not (isinstance(m, dict) and m.get("role") in ("video", "contact_sheet"))]
+        media.append({"url": video_url, "role": "video", "name": "video.mp4"})
+        if contact_sheet_url:
+            media.append({"url": contact_sheet_url, "role": "contact_sheet", "name": "contact-sheet.jpg"})
+        summary = {k: report.get(k) for k in ("hash", "seconds", "timing", "checks", "file")}
+        values: dict[str, Any] = {"media": media, "audit": {**item["audit"], "video": summary}, "updated_at": now_iso()}
+        if item["status"] in READY:
+            values.update(status="in_review", approved_hash=None, approved_by=None, approved_at=None)
+        self.db.update("items", "id", item_id, values)
+        self._event(actor, "video_rendered", item=item, detail={"seconds": report.get("seconds")})
+        return self.get_item(actor, item_id)
+
+    def approve_script(self, actor: Actor, item_id: int, notes: str = "") -> dict[str, Any]:
+        """First of two reviews for a video: the words are right, go and make it. The item returns to the
+        drafting agent, which attaches footage and voiceover, renders, and submits the video for the second review."""
+        self._require(actor, "admin")
+        item = self._item(actor, item_id)
+        if item["kind"] != "short_video":
+            raise HubError("Only video items have a script stage.")
+        if item["status"] not in ("in_review", "drafting", "needs_revision"):
+            raise HubError(f"Item {item_id} is '{item['status']}'.", 409)
+        blocking = [b for b in self.blockers(item) if not b.startswith("No video yet")]
+        if blocking:
+            raise HubError("Can't approve the script yet: " + "; ".join(blocking), 409)
+        note = "Script approved. Produce the video (footage, voiceover, render) and submit it." + (f" {notes.strip()}" if notes.strip() else "")
+        self.db.update("items", "id", item_id, {
+            "status": "needs_revision", "review_notes": note, "updated_at": now_iso(),
+            "audit": {**item["audit"], "script_approved": {"by": actor.name, "at": now_iso()}}})
+        self._event(actor, "script_approved", item=item, detail={"notes": notes.strip()})
+        return self.get_item(actor, item_id)
+
     def set_claims(self, actor: Actor, item_id: int, claims: list[dict[str, Any]]) -> dict[str, Any]:
         """Replace an anchor's claim ledger. Derivatives restate these instead of making new claims."""
         self._require(actor, "admin", "generator")
@@ -409,6 +466,11 @@ class Hub:
         out += [f"Open gap: {gap}" for gap in item["gaps"]]
         if self.slides_stale(item):
             out.append("Slide images are missing or older than the slide text; render them again.")
+        state = self.video_state(item)
+        if state == "script":
+            out.append("No video yet. Approve the script to send it to production, or render the video.")
+        elif state == "stale":
+            out.append("The video is older than the script or footage; render it again.")
         anchor_id = item["parent_id"] or item["id"]
         claims = self.db.all("SELECT * FROM claims WHERE item_id = ?", (anchor_id,))
         cited = set(item["body"].get("claim_ids") or item["body"].get("claimIds") or []) if item["parent_id"] else None
@@ -433,6 +495,7 @@ class Hub:
         item["claims"] = self.db.all("SELECT * FROM claims WHERE item_id = ? ORDER BY id", (anchor_id,))
         item["blockers"] = self.blockers(item)
         item["slides_stale"] = self.slides_stale(item)
+        item["video_state"] = self.video_state(item)
         item["children"] = self.db.all("SELECT id, kind, channel, title, status FROM items WHERE parent_id = ?", (item_id,))
         item["publications"] = self.db.all("SELECT * FROM publications WHERE item_id = ? ORDER BY id", (item_id,))
         item["events"] = self.db.all("SELECT actor, role, action, detail, at FROM events WHERE item_id = ? ORDER BY id DESC LIMIT 30", (item_id,))
@@ -473,7 +536,7 @@ class Hub:
             raise HubError(f"Item {item_id} is '{item['status']}'; only drafts can be submitted.", 409)
         if content_hash(item) is None:
             raise HubError("Add the body before submitting.")
-        self.db.update("items", "id", item_id, {"status": "in_review", "error": "", "updated_at": now_iso()})
+        self.db.update("items", "id", item_id, {"status": "in_review", "error": "", "review_notes": "", "updated_at": now_iso()})
         self._event(actor, "submitted", item=item)
         return self.get_item(actor, item_id)
 
@@ -553,10 +616,18 @@ class Hub:
 
         return {
             "id": item["id"], "project": item["project"], "kind": item["kind"], "channel": item["channel"],
-            "account": item["account"], "title": item["title"], "body": with_tracking(item["body"]), "media": self._absolute_media(item["media"]),
+            "account": item["account"], "title": item["title"], "body": with_tracking(item["body"]), "media": self._absolute_media(self._post_media(item)),
             "link": tracked, "scheduled_at": item["scheduled_at"], "approved_by": item["approved_by"],
             "approved_at": item["approved_at"], "disclosure": (brand.get("disclosure") or {}).get(item["channel"], ""),
         }
+
+    @staticmethod
+    def _post_media(item: dict[str, Any]) -> list[Any]:
+        """What actually gets posted: the finished video or the slides, not the working files."""
+        final = {"short_video": ("video",), "carousel": ("slide",)}.get(item["kind"])
+        if not final:
+            return item["media"]
+        return [m for m in item["media"] if isinstance(m, dict) and m.get("role") in final]
 
     def _absolute_media(self, media: list[Any]) -> list[Any]:
         base = self.public_url

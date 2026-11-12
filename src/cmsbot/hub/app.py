@@ -134,6 +134,17 @@ def build_mcp(hub: Hub, storage):
         return {"id": item["id"], "media": item["media"], "slides_stale": item["slides_stale"]}
 
     @tool
+    def render_video(item_id: int) -> dict[str, Any]:
+        """Build the captioned 1080x1920 video for a short_video item from its script plus whatever footage and
+        voiceover are attached (roles shot-01..NN, voiceover, timing, music; attach with `cmsbot hub upload`).
+        Shots without footage become branded cards, so this also works as a preview of the script alone.
+        Returns the checks a reviewer will see; fix the ones marked not ok before submitting."""
+        item = rendering.render_video_item(hub, storage, actor(), item_id)
+        report = item["audit"]["video"]
+        return {"id": item["id"], "seconds": report["seconds"], "checks": report["checks"],
+                "video": next(m["url"] for m in item["media"] if isinstance(m, dict) and m.get("role") == "video")}
+
+    @tool
     def set_claims(item_id: int, claims: list[dict[str, Any]]) -> dict[str, Any]:
         """Replace an anchor item's claim ledger: [{text, citation, citation_url}]. A person verifies each one."""
         return hub.set_claims(actor(), item_id, claims)
@@ -367,7 +378,7 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
 
     @app.post("/api/items/{item_id}/render")
     def render_slides(item_id: int, actor: Actor = Depends(who)):
-        return rendering.render_item(hub, storage, actor, item_id)
+        return rendering.render_any(hub, storage, actor, item_id)
 
     @app.put("/api/items/{item_id}/render")
     def put_render(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
@@ -395,6 +406,8 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
             if actor.role == "admin":
                 rendering.render_if_stale(hub, storage, actor, item_id)
             return hub.approve(actor, item_id, scheduled_at=body.get("scheduled_at"))
+        if action == "approve-script":
+            return hub.approve_script(actor, item_id, body.get("notes", ""))
         if action == "request-changes":
             return hub.request_changes(actor, item_id, body.get("notes", ""))
         if action == "reject":

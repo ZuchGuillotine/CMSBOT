@@ -215,10 +215,17 @@ def hub_upload(item_id: int, files: tuple[Path, ...], role: str) -> None:
 @click.argument("item_id", type=int)
 @click.option("--local", is_flag=True, help="Render on this machine and upload, instead of asking the Hub to render.")
 def hub_render(item_id: int, local: bool) -> None:
-    """Render a carousel item's slide images and attach them."""
+    """Render a carousel's slide images, or a short video, and attach the result to the item."""
     remote = Remote()
     if not local:
+        remote.client.timeout = httpx.Timeout(900)
         item = remote.call("POST", f"/items/{item_id}/render")
+        if item["kind"] == "short_video":
+            report = item["audit"]["video"]
+            click.echo(f"#{item_id}: {report['seconds']}s video rendered by the Hub.")
+            for entry in report["checks"]:
+                click.echo(f"  {'ok   ' if entry['ok'] else 'CHECK'} {entry['check']}: {entry['detail']}")
+            return
         click.echo(f"#{item_id}: {sum(1 for m in item['media'] if isinstance(m, dict) and m.get('role') == 'slide')} slides rendered by the Hub.")
         return
     import tempfile
@@ -264,3 +271,32 @@ def carousel_render(spec_file: Path, out_dir: Path, project_file: Path | None, i
     except carousel.CarouselError as exc:
         raise click.ClickException(str(exc)) from exc
     click.echo(f"{len(result['files'])} slides ({result['style']}) -> {out_dir}")
+
+
+@click.group("video")
+def video_group() -> None:
+    """Render short vertical videos from a storyboard, footage and a brand kit."""
+
+
+@video_group.command("render")
+@click.argument("storyboard_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path))
+@click.option("--assets", "assets_dir", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None,
+              help="Folder with shot-01.mp4, shot-02.png, voiceover.m4a, timing.json, music.mp3 (all optional).")
+@click.option("--project-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None)
+@click.option("--item", type=int, default=0, help="Which script in a derive file ({\"items\": [...]}).")
+def video_render(storyboard_file: Path, out_dir: Path, assets_dir: Path | None, project_file: Path | None, item: int) -> None:
+    """Write video.mp4 (1080x1920), contact-sheet.jpg and render.json to --out."""
+    from cmsbot import video
+
+    body = json.loads(storyboard_file.read_text(encoding="utf-8"))
+    if isinstance(body.get("items"), list):
+        body = body["items"][item]
+    brand = json.loads(project_file.read_text(encoding="utf-8")) if project_file else {}
+    try:
+        report = video.render(body, brand, out_dir, assets=video.find_assets(assets_dir) if assets_dir else {})
+    except video.VideoError as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(f"{report['seconds']}s -> {report['video']}")
+    for entry in report["checks"]:
+        click.echo(f"  {'ok   ' if entry['ok'] else 'CHECK'} {entry['check']}: {entry['detail']}")

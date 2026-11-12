@@ -76,6 +76,12 @@ Done in step 2:
   uploads go through the Hub.
 - Per-project access: reviewer and agent tokens can be limited to one project, checked everywhere.
 
+Done in step 3:
+- Video renderer: script + footage + voiceover + brand kit to a captioned 1080x1920 MP4 with a
+  contact sheet and checks; shots without footage render as branded cards.
+- Two-stage video review in the Hub (script, then video), re-render on reviewer edits, and only the
+  finished video handed to the posting agent.
+
 Not done yet, in order:
 
 1. **Stand it up.** Host the Hub, create tokens, connect Claude and Grok Bot. Verify Grok Bot's
@@ -86,9 +92,10 @@ Not done yet, in order:
    which has its own approval. Decide between (a) reviewing those two kinds in Micros as today and
    everything else in the Hub, or (b) a small Micros endpoint that accepts Hub-approved copy so
    review happens once. (b) needs a change in the Micros repo.
-4. **Video renderer.** `cmsbot video render`: storyboard + timing + clips to a captioned 1080x1920
-   file (HTML overlays, ffmpeg), plus Seedance and Grok Imagine clip providers with a spend cap.
-   The skill describes the method; this makes step 6 of it one command.
+4. **Footage generation.** Clip and still providers for Seedance and Grok Imagine behind one
+   interface, with a per-item spend cap, a pilot-then-full run, and automatic `record_cost`. Check
+   each provider's current API docs first. Also: word timestamps from a recorded voiceover
+   (transcription), so caption sync is exact without a hand-made timing file.
 5. **Hosting on Cloudflare.** Media can go to R2 today. Running the Hub itself there means moving
    its storage from a SQLite file to D1 and checking the current Workers/Containers options; the
    storage layer is five methods, so this is contained. Until then any small container host works.

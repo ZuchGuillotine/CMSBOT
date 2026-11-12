@@ -223,14 +223,17 @@ def can_render() -> bool:
     return find_chrome() is not None
 
 
-def _screenshot(chrome: str, html_path: Path, png_path: Path) -> None:
+def screenshot(chrome: str, html_path: Path, png_path: Path, *, width: int = WIDTH, height: int = HEIGHT,
+               transparent: bool = False) -> None:
+    html_path, png_path = Path(html_path).resolve(), Path(png_path).resolve()
     last = ""
     for _ in range(2):  # headless Chrome occasionally stalls on a font fetch; retry once
         with tempfile.TemporaryDirectory() as profile:
             command = [
                 chrome, *([] if "headless-shell" in Path(chrome).name else ["--headless=new"]), "--no-sandbox", "--disable-gpu", "--hide-scrollbars", "--no-first-run",
                 "--no-default-browser-check", f"--user-data-dir={profile}", "--force-device-scale-factor=1",
-                f"--window-size={WIDTH},{HEIGHT}", "--virtual-time-budget=4000", f"--screenshot={png_path}",
+                f"--window-size={width},{height}", "--virtual-time-budget=4000", f"--screenshot={png_path}",
+                *(["--default-background-color=00000000"] if transparent else []),
                 html_path.as_uri(),
             ]
             try:
@@ -259,6 +262,6 @@ def render_pngs(body: dict[str, Any], brand: dict[str, Any] | None, out_dir: Pat
             document = document.replace("url(&quot;/media/", f"url(&quot;{media_root.resolve().as_uri()}/")
         html_path, png_path = out_dir / f"slide-{number:02d}.html", out_dir / f"slide-{number:02d}.png"
         html_path.write_text(document, encoding="utf-8")
-        _screenshot(chrome, html_path, png_path)
+        screenshot(chrome, html_path, png_path)
         files.append(png_path)
     return {"style": built["style"], "hash": built["hash"], "files": files}

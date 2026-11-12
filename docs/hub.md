@@ -118,6 +118,26 @@ screenshotted to 1080x1350 PNGs, so words are always real type.
 
 Rendering needs a headless Chrome on whichever machine renders. The container installs one.
 
+## Short video
+
+A `short_video` item's body is a script: hook, beats (narration, on-screen line, visual note),
+ending. It is reviewed twice.
+
+1. **Script.** The reviewer reads and edits the words and presses "Approve script". The item returns
+   to the drafting agent. "Render preview" at this stage builds the script as branded cards with
+   captions, to judge pacing before anything is spent on footage.
+2. **Video.** The agent attaches footage and sound by role (`shot-01`…, `voiceover`, `timing`,
+   `music`) and renders. The reviewer sees the video, a contact sheet and a list of checks, and
+   approves. Editing words here renders the video again on save or approve. The posting agent
+   receives only the finished video, never the working files.
+
+The renderer (`src/cmsbot/video/`) draws every word in code over the footage: wordmark, on-screen
+lines, source and captions, in the brand kit's colours and fonts, at 1080x1920. Captions follow
+word timestamps when a `timing` file is attached; otherwise they are spread across the voiceover by
+word count, and the checks say so. It needs `ffmpeg` and a headless Chrome on the rendering machine;
+the container has both. Generating the footage itself (Seedance, Grok Imagine) is a separate step
+that is not built yet.
+
 ## Who can see what
 
 Every token has a role and, optionally, one project. A token limited to a project can't read or

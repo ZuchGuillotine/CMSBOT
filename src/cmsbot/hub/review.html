@@ -45,7 +45,7 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
 .claim{border:1px solid var(--line);border-radius:8px;padding:9px;margin-bottom:8px;background:var(--panel)}
 .claim .acts{display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap}
 .actions{position:fixed;bottom:0;right:0;left:min(360px,40vw);background:var(--panel);border-top:1px solid var(--line);padding:10px 22px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.media{display:flex;gap:8px;flex-wrap:wrap}.media img,.media video{height:150px;border-radius:6px;border:1px solid var(--line)}
+.media{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}.media figure{margin:0}.media figcaption{font-size:12px;color:var(--muted);margin-top:2px}.media video:first-child{max-height:300px;height:300px}.media img,.media video{height:150px;border-radius:6px;border:1px solid var(--line)}
 table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);font-size:14px}
 th{color:var(--muted);font-weight:500;font-size:12px}
 details summary{cursor:pointer;color:var(--muted)}
@@ -133,9 +133,14 @@ function renderDetail(){const it=current, d=$("detail");const reviewable=["in_re
   if(it.error)parts.push(el("div",{class:"note bad",text:it.error}));
   if(it.changed_since_approval)parts.push(el("div",{class:"note warn",text:"Edited after approval. It will not be posted until approved again."}));
   if(it.review_notes)parts.push(el("div",{class:"note warn",text:"Your note to the agent: "+it.review_notes}));
-  const media=it.media.filter(m=>!(m&&m.role==="slide"));
-  if(media.length){parts.push(el("h2",{text:"Media"}),el("div",{class:"media"},...media.map(m=>{const url=typeof m==="string"?m:(m.url||"");return /\.(mp4|mov|webm)(\?|$)/i.test(url)?el("video",{src:url,controls:true}):el("img",{src:url,alt:(m&&m.alt)||"",loading:"lazy"})})))}
+  const rank=m=>({video:0,contact_sheet:1}[m&&m.role]??2);const media=it.media.filter(m=>!(m&&m.role==="slide")).sort((x,y)=>rank(x)-rank(y));
+  if(media.length){parts.push(el("h2",{text:"Media"}),el("div",{class:"media"},...media.map(m=>{const node=(()=>{const url=typeof m==="string"?m:(m.url||"");return /\.(mp4|mov|webm)(\?|$)/i.test(url)?el("video",{src:url,controls:true}):/\.(m4a|mp3|wav|aac|ogg)(\?|$)/i.test(url)?el("audio",{src:url,controls:true}):/\.json(\?|$)/i.test(url)?el("a",{class:"chip",href:url,target:"_blank",text:(m&&m.role)||"file"}):el("img",{src:url,alt:(m&&m.alt)||"",title:(m&&m.role)||"",loading:"lazy"})})();return el("figure",{},node,el("figcaption",{text:({video:"Final video",contact_sheet:"Contact sheet (one frame every 2s)"}[m&&m.role])||(m&&m.role)||""}))})))}
   if(it.kind==="carousel"){const strip=el("div",{class:"slides",id:"slides"});const state=el("div",{id:"slideState"});parts.push(el("h2",{text:"Slides (live preview)"}),strip,state);setTimeout(()=>drawSlides(it),0)}
+  if(it.kind==="short_video"){const v=it.audit.video;parts.push(el("h2",{text:"Video"}));
+    if(it.video_state==="script")parts.push(el("div",{class:"note warn",text:it.audit.script_approved?"Script approved by "+it.audit.script_approved.by+". Waiting for the video.":"Script stage: no video yet. Approve the script to send it to production, or render a preview from the script."}));
+    if(it.video_state==="stale")parts.push(el("div",{class:"note warn",text:"The video is older than the script or footage. It is rendered again when you save or approve."}));
+    if(v&&v.checks)parts.push(el("table",{},...v.checks.map(c=>el("tr",{},el("td",{},el("span",{class:"chip "+(c.ok?"ok":"warn"),text:c.ok?"ok":"check"})),el("td",{text:c.check}),el("td",{text:c.detail})))));
+    if(!locked)parts.push(el("p",{},el("button",{class:"btn small",text:v?"Render again":"Render preview",onclick:async e=>{e.target.disabled=true;e.target.textContent="Rendering…";try{if(dirty)await api("/items/"+it.id,"PATCH",{title:draft.title,body:draft.body,link:draft.link,gaps:draft.gaps,note:"reviewer edit"});await api(`/items/${it.id}/render`,"POST");dirty=false;toast("Rendered");await refresh(it.id)}catch(err){toast(err.message);e.target.disabled=false;e.target.textContent="Render again"}}})))}
   parts.push(el("h2",{text:"Copy"}));const body=editor(draft.body,v=>draft.body=v,"");if(locked)body.querySelectorAll("textarea,input,button").forEach(n=>n.disabled=true);parts.push(body);
   const link=el("input",{type:"url",placeholder:"https://…"});link.value=draft.link;link.disabled=locked;link.addEventListener("input",()=>{draft.link=link.value;touch()});
   parts.push(el("div",{class:"field"},el("label",{text:"Link (tracking tags are added automatically)"}),link,it.tracked_link?el("div",{class:"count",text:it.tracked_link}):null));
@@ -156,7 +161,8 @@ function renderDetail(){const it=current, d=$("detail");const reviewable=["in_re
   if(!locked){bar.append(el("button",{class:"btn",id:"saveBtn",text:"Save edits",disabled:!dirty,onclick:()=>run(()=>api("/items/"+it.id,"PATCH",{...changes(),note:"reviewer edit"}),"Saved")}))}
   if(reviewable){const when=el("input",{type:"datetime-local",title:"Optional: when it should go out"});
     const approve=()=>run(()=>api(`/items/${it.id}/approve`,"POST",{...changes(),scheduled_at:when.value?new Date(when.value).toISOString():undefined}),"Approved");
-    bar.append(when,el("button",{class:"btn primary",id:"approveBtn",text:"Approve",onclick:approve}));
+    if(it.video_state==="script")bar.append(el("button",{class:"btn primary",id:"approveBtn",text:"Approve script",onclick:()=>run(async()=>{if(dirty)await api("/items/"+it.id,"PATCH",{...changes(),note:"reviewer edit"});await api(`/items/${it.id}/approve-script`,"POST",{})},"Script approved; sent to production")}));
+    else bar.append(when,el("button",{class:"btn primary",id:"approveBtn",text:"Approve",onclick:approve}));
     const note=el("input",{type:"text",placeholder:"What should change? (goes to the agent)",style:"flex:1;min-width:180px"});
     bar.append(note,el("button",{class:"btn",text:"Send back",onclick:()=>run(()=>api(`/items/${it.id}/request-changes`,"POST",{notes:note.value}),"Sent back to the agent")}),
       el("button",{class:"btn danger",text:"Reject",onclick:()=>run(()=>api(`/items/${it.id}/reject`,"POST",{notes:note.value}),"Rejected")}))}

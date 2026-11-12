@@ -31,6 +31,8 @@ def media_key(project: str, item_id: int, name: str) -> str:
 
 
 def content_type_for(name: str, declared: str = "") -> str:
+    if name.lower().endswith(".json"):  # word timings for a voiceover
+        return "application/json"
     guessed = mimetypes.guess_type(name)[0] or declared.split(";")[0].strip() or "application/octet-stream"
     if not guessed.startswith(ALLOWED_TYPES):
         raise MediaError(f"'{name}' is {guessed}; only image, video and audio files can be attached.")

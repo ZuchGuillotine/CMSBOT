@@ -42,17 +42,40 @@ Estimate cost before generating. Run a pilot of two or three shots and look at t
 run. Set a cap for the item; stop at the cap. One take per shot unless review flags it. Log each
 paid call with `record_cost(category="video" | "image" | "audio")`.
 
-## 6. Assemble
-Render overlays and captions from `storyboard.json` and `timing.json` as transparent frames
-(HTML to image) and composite over the clips with `ffmpeg` at 1080x1920. Captions use the words
-actually spoken. Rotate at least three visual treatments per account so posts do not look stamped.
+## 6. Assemble: one command
+Attach the files to the item by role, then render:
 
-## 7. Check with numbers, then hand over
-Before saving: every caption on screen at its word's time; text at least 36 px on a phone-sized
-frame; no stray text or brand marks in footage; no realistic generated people presenting advice;
-required AI-content and brand disclosures noted in the caption fields. Review a contact sheet of
-one frame per second. Then `save_draft(item_id=..., media=[{"url": ...}])` with the video and
-`submit_for_review`. List known issues in `gaps` instead of hiding them.
+```bash
+cmsbot hub upload <item_id> shot-02.mp4 --role shot-02
+```
+
+```bash
+cmsbot hub upload <item_id> voiceover.m4a --role voiceover
+```
+
+```bash
+cmsbot hub render <item_id>
+```
+
+(or the `render_video` tool). Roles: `shot-01` … `shot-NN` (hook is shot 1, then the beats, then the
+ending), `voiceover`, `timing` (a JSON file of word timestamps, for exact caption sync), `music`.
+The renderer fits footage to 1080x1920, draws the wordmark, on-screen lines, source and captions in
+the brand's style, mixes the sound, and attaches the video and a contact sheet. A shot with no
+footage becomes a branded card, so you can render the script alone to check pacing before spending
+anything on clips. To work on files without the Hub: `cmsbot video render storyboard.json --assets
+dir --out dir --project-file project.json`.
+
+## 7. Read the checks, then hand over
+The render returns checks (size, length, sound, caption timing, every word captioned, footage, on-
+screen text length, pace). Fix anything not ok that you can fix; what you cannot (no voiceover yet)
+goes in `gaps`. Look at the contact sheet for stray text or brand marks in generated footage and
+for realistic generated people. Then `submit_for_review`.
+
+## Two reviews
+A video is reviewed twice. First the script: the reviewer approves it and the item comes back to
+you as "needs revision" with the note "Script approved. Produce the video". Do not generate footage
+before that. Then the finished video. If the reviewer edits words at the second review, the Hub
+renders it again; you do nothing.
 
 ## Do not
 Use a realistic generated presenter for health, finance or legal advice. Invent a testimonial or a
