@@ -1,6 +1,6 @@
 # CMSBOT refactor plan
 
-Started 2026-11-11. This is the working plan; update it as steps land. Setup instructions are in
+Started 2026-11-11, last updated 2026-11-12. This is the working plan; update it as steps land. Setup instructions are in
 [`hub.md`](hub.md), skills in [`../skills/README.md`](../skills/README.md).
 
 ## What was actually wrong
@@ -114,39 +114,66 @@ Done in step 9:
 - Rhythm and what's due: one call that tells each role what to do now, run logging, snapshot
   reminders at 24h/72h/7d, and the same list on the Insights tab.
 
-Not done yet, in order:
+Done in step 10:
+- An all-round `agent` role, and each connected agent is told its scope (`whoami`, role-filtered
+  tool list).
 
-1. **Stand it up.** Host the Hub, create tokens, connect Claude and Grok Bot. Verify Grok Bot's
-   connector against the live endpoint (its docs describe remote MCP with headers; not yet tested).
-2. **Onboard the three projects.** Brand kits for Haidaa and InfiniOffice do not exist yet; run
-   `cmsbot-onboard` on each. Import Micros' kit from its project pack.
-3. **Micros bridge.** Micros blogs and newsletters still publish through the Micros app's own queue,
-   which has its own approval. Decide between (a) reviewing those two kinds in Micros as today and
-   everything else in the Hub, or (b) a small Micros endpoint that accepts Hub-approved copy so
-   review happens once. (b) needs a change in the Micros repo.
-4. **First live generation.** Grok Imagine, Seedance (through OpenRouter) and ElevenLabs are
-   wired into the Hub with caps and cost recording, written from the providers' docs and tested
-   only against stand-ins. Put keys on the Hub, make one real still, clip and voiceover, and fix
-   whatever the live APIs do differently. Set the `CMSBOT_RATE_*` values to real prices.
-5. **Hosting on Cloudflare.** Media can go to R2 today. Running the Hub itself there means moving
-   its storage from a SQLite file to D1 and checking the current Workers/Containers options; the
-   storage layer is five methods, so this is contained. Until then any small container host works.
-6. **Photo-backed carousels.** Slides accept a background image; add generation of those images
-   (Grok Imagine) and a second layout, and record `style` so results can be compared.
-7. **Scheduled runs.** Weekly plan, weekly write, daily distribute, weekly analyze, as scheduled
-   tasks in the harness already in use. Start in shadow mode: everything drafted, nothing posted.
-8. **Analytics connectors.** Wire the analyze skill to GA4, Mixpanel, Search Console and Ahrefs for
-   each project; add a landing-page convention for channels where links are weak (TikTok, Instagram).
-9. **Retire what the Hub replaces.** File-based `review approve`, the Drive and Sheet sync, and the
-   `goals/` scaffolding, once the three projects run through the Hub. Merge to `main` when the owner
-   is ready.
-10. **Later: improving the tool itself.** Hubs could report anonymised error and outcome summaries
-    upstream. Out of scope until the basic loop is proven.
+## Where things stand (2026-11-12)
+
+**Live:** the Hub runs at its own address on one small AWS Lightsail instance (about $13 a month for
+all projects). InfiniOffice exists on it with one imported anchor (the bookkeeping guide) and a
+13-piece series drafted by an outside agent. A generator token and a Grok Bot token exist.
+
+**Proven live:** first-run setup, tokens, import, series planning, an outside agent drafting through
+the MCP endpoint, a generated still and a Grok video clip, a rendered video.
+
+**Not yet proven live:** no piece has gone draft → approve → post → metrics → analysis through the
+Hub. Grok Bot has not been connected. Seedance (after the audio fix) and ElevenLabs have not
+completed a real call. The what's-due loop, skill proposals and the Brand tab's site reader have
+only been tested locally. Cost rates for generation are placeholders.
+
+**Decided today, not built:** Hub-run drafting with model API keys and wake hooks were discussed and
+deferred. Splitting agents means starting each one separately or on its own schedule.
+
+## Trial and product decision
+
+The owner is considering turning CMSBOT into a product. The agreed position: not on today's
+evidence. Run it on the three projects first, then decide.
+
+- **Review date: 2026-12-10** (four weeks). A reminder is scheduled.
+- **What to look at:** pieces drafted, approved and posted per project; reviewer time per week;
+  share of posts with a 7-day numbers snapshot; visits and signups attributed to individual posts
+  (`utm_content=cmsbot-<id>`); spend per project and cost per signup; how often runs happened without
+  being prompted (the last-runs table); what broke.
+- **Decide to productize only if** the loop ran without hand-holding and there are results worth
+  putting on a landing page. Otherwise it stays an internal, open-source tool.
+- If it goes ahead, the gaps are: accounts and sign-in instead of tokens, multi-tenant hosting,
+  billing, onboarding, and channel posting that does not depend on a third-party agent.
+
+## Next, in order
+
+1. **Redeploy and finish the InfiniOffice run.** Fill in the Brand tab, re-read the guide, redo its
+   claims, review the 13 pieces, approve some, reject test item 1.
+2. **Connect Grok Bot** as distributor and post the approved pieces. This is the first real test of
+   the hand-off and of metrics coming back.
+3. **Schedule the agents** (daily wake, ask what's due) and let the loop run for the trial.
+4. **Onboard Haidaa and Micros:** brand kits, default series, tokens. Micros blogs and newsletters
+   stay in the Micros admin; its social pieces go through the Hub.
+5. **Wire analytics:** GA4, Mixpanel, Search Console and Ahrefs through the analysis agent's
+   connectors; confirm attribution by `utm_content` works on each site.
+6. **Finish generation:** retry Seedance, set an ElevenLabs voice, replace placeholder rates with
+   real prices, find a higher resolution for Grok video or prefer Seedance.
+7. **Smaller gaps:** delete or archive for items; private-until-approved media if wanted; uploaded
+   brand pictures feeding footage prompts; stamping `persona` on drafts automatically; skills with
+   helper files.
+8. **Later:** Postgres or Cloudflare D1 storage; photo-backed carousels; Hub-run drafting with API
+   keys; wake hooks; retiring the file-based commands the Hub replaces; merging to `main` (which also
+   publishes the container image).
 
 ## Open questions for the owner
 
-- Where to host the Hub (the existing AWS account, or a small separate host)?
-- Micros bridge: option (a) or (b) above?
-- Who reviews each project, and does Haidaa or InfiniOffice have claims that need verification?
-- Which channels and accounts exist today for Haidaa and InfiniOffice?
-- Monthly content budget per project.
+- Which accounts will Grok Bot post to for Haidaa and InfiniOffice, and when are the new ones
+  (InfiniOffice X, Meta app, TikTok) created?
+- Should media stay publicly reachable by link before approval, or be private until approved?
+- Monthly budgets for Haidaa and Micros, and who reviews each.
+- When to merge this branch to `main`.
