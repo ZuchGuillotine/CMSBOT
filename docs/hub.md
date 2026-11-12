@@ -138,6 +138,42 @@ word count, and the checks say so. It needs `ffmpeg` and a headless Chrome on th
 the container has both. Generating the footage itself (Seedance, Grok Imagine) is a separate step
 that is not built yet.
 
+## Generating footage and voice
+
+Paid generation runs inside the Hub, so the keys, the spend caps and the cost record are in one
+place and every agent can use them without holding a key.
+
+| Tool | Does | Provider (key on the Hub) |
+|---|---|---|
+| `media_options` | Shows what is configured and how much cap and budget is left | |
+| `generate_footage` | A still or a clip for one shot, attached as `shot-NN`; a clip starts from the shot's still | Grok Imagine (`XAI_API_KEY`), Seedance through OpenRouter (`OPENROUTER_API_KEY`) |
+| `generate_voiceover` | Speaks the script, attached with word timings for exact captions | ElevenLabs (`ELEVENLABS_API_KEY`; voice from the brand kit's `voiceover.voice_id` or `ELEVENLABS_VOICE_ID`) |
+
+Rules: nothing is generated before a person approves the script; each item has a media cap
+(project setting `item_media_cap_usd`, default $10); the project's `monthly_budget_usd` is a hard
+stop; every call is written to the cost record against the item. Costs are the provider's reported
+figure when it gives one (OpenRouter does), otherwise an estimate from the `CMSBOT_RATE_*` values;
+set those to your real rates.
+
+Put the keys in a file only root can read and pass it to the container:
+
+```bash
+sudo install -m 600 /dev/null /srv/cmsbot-hub/hub.env
+```
+
+```bash
+sudo nano /srv/cmsbot-hub/hub.env
+```
+
+```bash
+docker run ... --env-file /srv/cmsbot-hub/hub.env ...
+```
+
+The file holds lines such as `XAI_API_KEY=...`, `OPENROUTER_API_KEY=...`, `ELEVENLABS_API_KEY=...`.
+A managed secret store (AWS Secrets Manager, SSM Parameter Store) is worth it once the Hub runs
+somewhere with an instance role, such as ECS or EC2; on a single Lightsail box the server would
+need a stored AWS key to read it, which protects nothing extra.
+
 ## Who can see what
 
 Every token has a role and, optionally, one project. A token limited to a project can't read or
@@ -158,7 +194,8 @@ Each secret stays with the one party that uses it. The Hub and the repo hold non
 | Secret | Lives in | Never in |
 |---|---|---|
 | Social account logins and API keys (X, Meta, LinkedIn, TikTok) | The posting agent's own secret store (Grok Bot's connected apps and secrets) | The Hub, the repo, a brand kit |
-| Model keys for drafting, images, video | The drafting agent's environment (its environment settings or secret store; a local untracked `.env` for laptop runs) | The Hub, the repo |
+| Image, video and voice generation keys (xAI, OpenRouter for Seedance, ElevenLabs) | The Hub host's environment, in a root-only file outside the repo and image | Any agent, the repo, a brand kit |
+| Text model keys, only if the unattended API pipeline is used | That runner's environment or an untracked local `.env` | The Hub, the repo |
 | Analytics access (GA4, Mixpanel, Search Console, Ahrefs) | The analysis agent's connectors (signed in by the owner) | The Hub, the repo |
 | Media bucket keys | The Hub host's environment variables | Any agent |
 | Hub tokens | One per agent, in that agent's secret store | The repo; another agent |

@@ -28,6 +28,7 @@ from cmsbot.hub.service import (
     Hub,
     HubError,
 )
+from cmsbot.hub import generate as generation
 from cmsbot.hub import render as rendering
 from cmsbot.hub.media import MAX_UPLOAD_BYTES, MediaError, content_type_for, media_key, storage_from_env
 from cmsbot.hub.store import Store
@@ -143,6 +144,29 @@ def build_mcp(hub: Hub, storage):
         report = item["audit"]["video"]
         return {"id": item["id"], "seconds": report["seconds"], "checks": report["checks"],
                 "video": next(m["url"] for m in item["media"] if isinstance(m, dict) and m.get("role") == "video")}
+
+    @tool
+    def media_options(item_id: int) -> dict[str, Any]:
+        """Which image, video and voice providers this Hub can use, and how much of the item's media cap and the
+        project's monthly budget is left. Read this before generating anything."""
+        return generation.options(hub, actor(), item_id)
+
+    @tool
+    def generate_footage(item_id: int, shot: int, prompt: str, kind: str = "video", seconds: int = 5,
+                         provider: str = "") -> dict[str, Any]:
+        """Generate the still (kind='image') or clip (kind='video') for one shot of an approved video script and
+        attach it. Shots are numbered hook=1, then the beats, then the ending. Generate the still first: a video
+        then starts from that still, which keeps the look consistent. This spends money: it is refused before the
+        script is approved, above the item's media cap, or over the project's budget. Keep words, numbers and
+        logos out of the prompt; text is added by the renderer."""
+        return generation.generate_footage(hub, storage, actor(), item_id, shot=shot, prompt=prompt, kind=kind,
+                                           seconds=seconds, provider=provider)
+
+    @tool
+    def generate_voiceover(item_id: int, voice_id: str = "") -> dict[str, Any]:
+        """Speak an approved video script with the project's voice and attach it with word timings, so captions
+        sync exactly. Use only when the project has no recorded voiceover. Spends money, within the same caps."""
+        return generation.generate_voiceover(hub, storage, actor(), item_id, voice_id=voice_id)
 
     @tool
     def set_claims(item_id: int, claims: list[dict[str, Any]]) -> dict[str, Any]:
@@ -379,6 +403,19 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     @app.post("/api/items/{item_id}/render")
     def render_slides(item_id: int, actor: Actor = Depends(who)):
         return rendering.render_any(hub, storage, actor, item_id)
+
+    @app.get("/api/items/{item_id}/media-options")
+    def media_options(item_id: int, actor: Actor = Depends(who)):
+        return generation.options(hub, actor, item_id)
+
+    @app.post("/api/items/{item_id}/generate")
+    def generate(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        if body.get("what") == "voiceover":
+            return generation.generate_voiceover(hub, storage, actor, item_id, voice_id=body.get("voice_id", ""),
+                                                 provider=body.get("provider", ""))
+        return generation.generate_footage(hub, storage, actor, item_id, shot=int(body.get("shot", 0)),
+                                           prompt=body.get("prompt", ""), kind=body.get("kind", "video"),
+                                           seconds=int(body.get("seconds", 5)), provider=body.get("provider", ""))
 
     @app.put("/api/items/{item_id}/render")
     def put_render(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):

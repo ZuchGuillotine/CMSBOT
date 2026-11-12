@@ -5,8 +5,7 @@ description: Produce a 20-75 second vertical video (TikTok, Reels, Shorts) from 
 
 # Short video
 
-Needs: a video model key (Seedance through Higgsfield or OpenRouter, or xAI Grok Imagine), an image
-model key (Grok Imagine or Gemini), `ffmpeg`, and the `cmsbot-hub` tools. Voice is a recorded human
+Needs: the `cmsbot-hub` tools. Generation keys live on the Hub, not with you. Voice is a recorded human
 voiceover when the project provides one; otherwise say that the video is waiting on it.
 
 The method is "footage is the plate; meaning is drawn on top". Generated clips carry mood and
@@ -37,10 +36,16 @@ motion from the chosen still as the first frame. Video prompts are blocked and t
 one thing that happens, timestamped beats in clip time, then constraints ("locked camera", "one
 continuous shot", "nothing else enters the frame", "no text"). Leave empty space where overlays go.
 
-## 5. Spend discipline
-Estimate cost before generating. Run a pilot of two or three shots and look at them before the full
-run. Set a cap for the item; stop at the cap. One take per shot unless review flags it. Log each
-paid call with `record_cost(category="video" | "image" | "audio")`.
+## 5. Generate through the Hub, within the caps
+You hold no provider keys. Call `media_options(item_id)` first: it lists the providers this Hub has
+and what is left of the item's media cap and the project's budget. Render the script alone first
+(`render_video`) to settle pacing for free. Then, per shot that needs footage:
+`generate_footage(item_id, shot, prompt, kind="image")`, look at the still, and only then
+`generate_footage(..., kind="video", seconds=...)`, which starts from that still. Do two or three
+shots as a pilot and look at them before the rest. One take per shot unless something is wrong.
+The Hub refuses a call before the script is approved or once a cap is reached, and records every
+cost itself. If the project has no recorded voiceover, `generate_voiceover(item_id)` speaks the
+script and attaches word timings; a synthetic voice must be labelled when posted.
 
 ## 6. Assemble: one command
 Attach the files to the item by role, then render:

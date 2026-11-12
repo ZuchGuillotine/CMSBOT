@@ -82,6 +82,11 @@ Done in step 3:
 - Two-stage video review in the Hub (script, then video), re-render on reviewer edits, and only the
   finished video handed to the posting agent.
 
+Done in step 4:
+- The Hub is live at its own address on a small AWS instance.
+- Generation through the Hub: footage and voiceover tools with a per-item cap, the monthly budget
+  as a hard stop, a no-spend-before-script-approval rule, and automatic cost records.
+
 Not done yet, in order:
 
 1. **Stand it up.** Host the Hub, create tokens, connect Claude and Grok Bot. Verify Grok Bot's
@@ -92,10 +97,10 @@ Not done yet, in order:
    which has its own approval. Decide between (a) reviewing those two kinds in Micros as today and
    everything else in the Hub, or (b) a small Micros endpoint that accepts Hub-approved copy so
    review happens once. (b) needs a change in the Micros repo.
-4. **Footage generation.** Clip and still providers for Seedance and Grok Imagine behind one
-   interface, with a per-item spend cap, a pilot-then-full run, and automatic `record_cost`. Check
-   each provider's current API docs first. Also: word timestamps from a recorded voiceover
-   (transcription), so caption sync is exact without a hand-made timing file.
+4. **First live generation.** Grok Imagine, Seedance (through OpenRouter) and ElevenLabs are
+   wired into the Hub with caps and cost recording, written from the providers' docs and tested
+   only against stand-ins. Put keys on the Hub, make one real still, clip and voiceover, and fix
+   whatever the live APIs do differently. Set the `CMSBOT_RATE_*` values to real prices.
 5. **Hosting on Cloudflare.** Media can go to R2 today. Running the Hub itself there means moving
    its storage from a SQLite file to D1 and checking the current Workers/Containers options; the
    storage layer is five methods, so this is contained. Until then any small container host works.
