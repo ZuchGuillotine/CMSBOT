@@ -23,12 +23,14 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from cmsbot.hub.service import (
     CHANNELS,
+    DERIVATIVES,
     KINDS,
     POST_LIMITS,
     Actor,
     Hub,
     HubError,
 )
+from cmsbot.hub import fetch
 from cmsbot.hub import generate as generation
 from cmsbot.hub import jobs
 from cmsbot.hub import render as rendering
@@ -79,7 +81,7 @@ def start_generation(hub: Hub, storage, actor: Actor, item_id: int, what: str, *
     return {"job": jobs.start(hub, actor, item_id, f"generate_shot_{int(options['shot']):02d}", work, _generated_summary)}
 
 
-def build_mcp(hub: Hub, storage):
+def build_mcp(hub: Hub, storage, do_import=None):
     from mcp.server.mcpserver import MCPServer
     from mcp.server.mcpserver.exceptions import ToolError
     from mcp.server.transport_security import TransportSecuritySettings
@@ -130,6 +132,26 @@ def build_mcp(hub: Hub, storage):
         return hub.create_cluster(actor(), project, name, pillar=pillar or None, theme=theme, keywords=keywords,
                                   starts_on=starts_on or None, ends_on=ends_on or None, origin=origin,
                                   signal_id=signal_id or None)
+
+    @tool
+    def import_published(project: str, url: str, title: str = "", markdown: str = "") -> dict[str, Any]:
+        """Bring in a piece that is already live (a published blog post or guide) as an anchor, so a series can be
+        made from it. Give the text as markdown if you have it; otherwise the Hub reads the page. Afterwards call
+        set_claims on it with every factual claim the series might repeat."""
+        item = do_import(actor(), project, url, title, markdown)
+        return {"id": item["id"], "title": item["title"], "status": item["status"], "series": hub.series(actor(), item["id"])["children"]}
+
+    @tool
+    def get_series(anchor_id: int) -> dict[str, Any]:
+        """An anchor and the pieces planned or made from it, with their status, plus the project's default recipe."""
+        return hub.series(actor(), anchor_id)
+
+    @tool
+    def plan_series(anchor_id: int, plan: list[dict[str, Any]]) -> dict[str, Any]:
+        """Set how many of each piece an anchor should have: [{kind, channel, count}], e.g. 8 threads on x and 3
+        short videos on tiktok. Adds planned items to write and removes only untouched planned ones. Use when the
+        owner asks for more or fewer pieces from an anchor; otherwise the project's recipe applies."""
+        return hub.plan_series(actor(), anchor_id, plan)
 
     @tool
     def list_items(project: str = "", status: str = "", channel: str = "", kind: str = "", limit: int = 100) -> list[dict[str, Any]]:
@@ -321,14 +343,14 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     db_path = db_path or default_db_path()
     hub = hub or Hub(Store(db_path), os.environ.get("CMSBOT_HUB_PUBLIC_URL", ""))
     storage = storage or storage_from_env(db_path if hub.db.path != ":memory:" else ":memory:")
-    server, mcp_app = build_mcp(hub, storage) if with_mcp else (None, None)
+    mcp_holder: dict[str, Any] = {}
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI):
-        if server is None:
+        if not mcp_holder:
             yield
             return
-        async with server.session_manager.run():
+        async with mcp_holder["server"].session_manager.run():
             yield
 
     app = FastAPI(title="CMSBOT Hub", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
@@ -358,6 +380,18 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
             return bool(item["active_jobs"])
         rendering.render_if_stale(hub, storage, actor, item_id)
         return False
+
+    def do_import(actor: Actor, project: str, url: str, title: str, markdown: str, published_at: str | None = None):
+        url = url.strip()
+        if not markdown.strip():  # no text supplied: read the page
+            try:
+                page = fetch.read_page(url)
+            except fetch.FetchError as exc:
+                raise HubError(f"{exc} You can paste the text instead.") from exc
+            title, markdown = title.strip() or page["title"], page["markdown"]
+            if len(markdown) < 200:
+                raise HubError("Could not find the article text on that page. Paste the text instead.")
+        return hub.import_published(actor, project, url=url, title=title, markdown=markdown, published_at=published_at)
 
     def who(authorization: str | None = Header(default=None)) -> Actor:
         found = hub.authenticate(_bearer(authorization))
@@ -427,6 +461,7 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     @app.get("/api/me")
     def me(actor: Actor = Depends(who)) -> dict[str, Any]:
         return {"name": actor.name, "role": actor.role, "project": actor.project, "kinds": KINDS,
+                "derivatives": [{"kind": k, "channels": list(c)} for k, c in DERIVATIVES.items()],
                 "channels": CHANNELS, "post_limits": POST_LIMITS}
 
     @app.get("/api/projects")
@@ -455,8 +490,24 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
 
     @app.get("/api/items")
     def items(project: str | None = None, status: str | None = None, channel: str | None = None,
-              kind: str | None = None, limit: int = Query(default=200), actor: Actor = Depends(who)):
-        return hub.list_items(actor, project=project, status=status, channel=channel, kind=kind, limit=limit)
+              kind: str | None = None, limit: int = Query(default=200), anchors: bool = False, actor: Actor = Depends(who)):
+        return hub.list_items(actor, project=project, status=status, channel=channel, kind=kind, limit=limit, anchors=anchors)
+
+    @app.get("/api/items/{item_id}/series")
+    def get_series(item_id: int, actor: Actor = Depends(who)):
+        return hub.series(actor, item_id)
+
+    @app.put("/api/items/{item_id}/series")
+    def put_series(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.plan_series(actor, item_id, body.get("plan", []))
+
+    @app.put("/api/projects/{slug}/recipe")
+    def put_recipe(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return {"recipe": hub.set_recipe(actor, slug, body.get("recipe", []))}
+
+    @app.post("/api/projects/{slug}/import")
+    def import_piece(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return do_import(actor, slug, body.get("url", ""), body.get("title", ""), body.get("markdown", ""), body.get("published_at"))
 
     item_fields = ("title", "body", "media", "attributes", "link", "gaps", "audit", "account")
 
@@ -627,6 +678,8 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     def get_performance(slug: str, age_hours: float = 168, actor: Actor = Depends(who)):
         return hub.performance(actor, slug, age_hours=age_hours)
 
-    if mcp_app is not None:
+    if with_mcp:
+        built_server, mcp_app = build_mcp(hub, storage, do_import)
+        mcp_holder["server"] = built_server
         app.mount("/", mcp_app)
     return app

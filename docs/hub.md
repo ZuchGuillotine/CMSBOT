@@ -85,6 +85,22 @@ Optional environment variables: `CMSBOT_HUB_SECRET_KEY` (supply the encryption k
 of the generated file, for example from a secret manager), the `CMSBOT_MEDIA_*` bucket settings
 below, and provider keys by name as a fallback when nothing is saved in Settings.
 
+## Anchors and their series
+
+An anchor is the piece that holds the facts, usually a blog post or guide. Everything made from it
+(threads, posts, carousels, short videos, a newsletter) is linked to it and restates its verified
+claims. Open an anchor from the **Anchors** tab to see its series.
+
+- **Default series (recipe):** on the Settings tab, set per project what each new anchor gets, for
+  example three X threads and one LinkedIn post.
+- **Per anchor:** on the anchor's page, raise or lower each count with the steppers and press Update
+  series. One guide may be worth eight threads and three videos; another, one carousel. Added pieces
+  appear as "to write" and drafting agents pick them up from the brief. Lowering a count removes only
+  pieces nobody has started.
+- **Already published:** "Import published piece" takes an address (and the text, if the page can't
+  be read). The piece is recorded as published, never enters review or posting, and gets the default
+  series. Agents do the same with `import_published`, and adjust with `plan_series`.
+
 ## Writing quality
 
 Text is drafted by the agent the project already uses, following `skills/cmsbot-write`, so the Hub

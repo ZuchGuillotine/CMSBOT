@@ -51,6 +51,11 @@ th{color:var(--muted);font-weight:500;font-size:12px}
 details summary{cursor:pointer;color:var(--muted)}
 .slides{display:flex;gap:10px;overflow-x:auto;padding-bottom:8px}.slides .slide{flex:none;width:216px;height:270px;overflow:hidden;border-radius:8px;border:1px solid var(--line)}
 .slides iframe{width:1080px;height:1350px;border:0;transform:scale(.2);transform-origin:0 0;pointer-events:none}
+.grid{border-collapse:separate;border-spacing:0 4px;width:auto}.grid td,.grid th{border:0;padding:3px 10px 3px 0;font-size:14px;vertical-align:middle}
+.step{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}
+.step button{border:0;background:none;width:28px;height:30px;cursor:pointer;font-size:16px;color:var(--muted)}.step button:hover{background:var(--chip)}
+.step output{min-width:26px;text-align:center;font-variant-numeric:tabular-nums}.step.on{border-color:var(--accent)}.step.on output{font-weight:700;color:var(--accent)}
+.step.changed{box-shadow:0 0 0 2px var(--warn-bg)}
 #login{max-width:380px;margin:12vh auto;background:var(--panel);padding:24px;border-radius:12px;border:1px solid var(--line)}
 #toast{position:fixed;top:14px;right:14px;background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;display:none;z-index:9;max-width:60vw}
 @media (max-width:760px){main{grid-template-columns:1fr;height:auto}#list{max-height:38vh;border-right:0;border-bottom:1px solid var(--line)}.actions{left:0}}
@@ -77,6 +82,7 @@ details summary{cursor:pointer;color:var(--muted)}
   <select id="channel" aria-label="Channel"><option value="">All channels</option></select>
   <span class="spacer"></span>
   <span class="chip" id="spend"></span>
+  <button class="btn small" id="importBtn">Import published piece</button>
   <button class="btn small" id="logout">Sign out</button>
 </header>
 <main>
@@ -85,7 +91,7 @@ details summary{cursor:pointer;color:var(--muted)}
 </main>
 </div>
 <script>
-const TABS=[["Needs review","in_review"],["Approved","approved,scheduled,posting"],["In progress","planned,drafting,needs_revision,failed"],["Posted","published"],["Rejected","rejected"],["Insights",""],["Settings",""]];
+const TABS=[["Needs review","in_review"],["Anchors","__anchors"],["Approved","approved,scheduled,posting"],["In progress","planned,drafting,needs_revision,failed"],["Posted","published"],["Rejected","rejected"],["Insights",""],["Settings",""]];
 const HIDDEN_KEYS=new Set(["claim_ids","claimIds"]);
 let token=localStorage.getItem("cmsbot_token")||"", me=null, tab=0, items=[], current=null, draft=null, dirty=false;
 const $=id=>document.getElementById(id);
@@ -129,7 +135,11 @@ async function renderSettings(){current=null;dirty=false;$("list").replaceChildr
     parts.push(el("h2",{text:"Projects"}),el("table",{},el("tr",{},...["Project","Monthly budget","Media cap per item","Claims must be verified"].map(h=>el("th",{text:h}))),...projects.map(p=>el("tr",{},el("td",{text:`${p.name} (${p.slug})`}),el("td",{text:p.settings.monthly_budget_usd?"$"+p.settings.monthly_budget_usd:"none"}),el("td",{text:"$"+(p.settings.item_media_cap_usd||10)}),el("td",{text:p.settings.require_verified_claims?"yes":"no"})))),
       el("div",{class:"claim"},el("div",{style:"display:grid;grid-template-columns:2fr 1fr 1fr auto auto;gap:8px;align-items:center"},pn,pb,pc,el("label",{},pv,document.createTextNode(" verify claims")),el("button",{class:"btn primary",text:"Add or update",onclick:async()=>{try{const settings={require_verified_claims:pv.checked};if(pb.value)settings.monthly_budget_usd=Number(pb.value);if(pc.value)settings.item_media_cap_usd=Number(pc.value);
         await api("/projects/"+encodeURIComponent(pn.value.trim().toLowerCase().replace(/[^a-z0-9]+/g,"-")),"PUT",{name:pn.value.trim(),settings});toast("Saved");await start();tab=TABS.length-1;renderTabs();again()}catch(e){toast(e.message)}}})),el("div",{class:"count",style:"text-align:left",text:"Brand kit and pillars are loaded with: cmsbot hub project <project.json>"})))}
-  d.replaceChildren(...parts);await drawKeys()}
+  const rp=el("select",{},...projects.map(p=>el("option",{value:p.slug,text:p.name}))),rbox=el("div");
+  const drawRecipe=()=>{const p=projects.find(x=>x.slug===rp.value);if(!p){rbox.replaceChildren();return}const g=seriesGrid(p.settings.recipe||[]);
+    rbox.replaceChildren(g.node,el("button",{class:"btn primary",style:"margin-top:6px",text:"Save default series",onclick:async()=>{try{const r=await api(`/projects/${p.slug}/recipe`,"PUT",{recipe:g.plan()});p.settings.recipe=r.recipe;toast("Saved");drawRecipe()}catch(e){toast(e.message)}}}))};
+  rp.addEventListener("change",drawRecipe);parts.push(el("h2",{text:"Default series for each anchor"}),el("p",{style:"color:var(--muted);margin:0 0 8px",text:"What a new blog or guide gets unless you choose otherwise. Adjust any single anchor on its own page."}),rp,rbox);
+  d.replaceChildren(...parts);drawRecipe();await drawKeys()}
 $("setupForm").addEventListener("submit",async e=>{e.preventDefault();try{const r=await fetch("/api/setup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:$("setupCode").value,name:$("setupName").value})});const data=await r.json();if(!r.ok)throw new Error(data.error);
   $("setupForm").hidden=true;$("setupDone").replaceChildren(tokenPanel({name:$("setupName").value||"reviewer",role:"admin",token:data.token}),el("p",{},el("button",{class:"btn primary",text:"I saved it — continue",onclick:()=>{token=data.token;localStorage.setItem("cmsbot_token",token);$("setupDone").replaceChildren();start()}})))}catch(err){toast(err.message)}});
 async function start(){if(!token)return signOut();try{me=await api("/me")}catch(e){return}
@@ -145,7 +155,7 @@ async function refresh(keepId){const project=$("project").value;localStorage.set
   $("spend").textContent="";if(project){api(`/projects/${project}/brief`).then(b=>{const s=b.spend;$("spend").textContent=`$${s.total_usd} this month`+(s.monthly_budget_usd?` of $${s.monthly_budget_usd}`:"");$("spend").className="chip"+(s.over_budget?" bad":"")}).catch(()=>{})}
   if(TABS[tab][0]==="Insights")return renderInsights(project);
   if(TABS[tab][0]==="Settings")return renderSettings();
-  const q=new URLSearchParams({status:TABS[tab][1]});if(project)q.set("project",project);if($("channel").value)q.set("channel",$("channel").value);
+  const q=TABS[tab][1]==="__anchors"?new URLSearchParams({anchors:"true"}):new URLSearchParams({status:TABS[tab][1]});if(project)q.set("project",project);if($("channel").value)q.set("channel",$("channel").value);
   items=await api("/items?"+q);renderList();
   const next=items.find(i=>i.id===keepId)||items[0];if(next)open(next.id);else{current=null;dirty=false;$("detail").replaceChildren(el("div",{class:"empty",text:"Nothing here."}))}}
 function renderList(){$("list").replaceChildren(...(items.length?items.map(i=>el("div",{class:"row","aria-current":String(current&&current.id===i.id),onclick:()=>{if(leaveOk())open(i.id)}},
@@ -187,6 +197,7 @@ function renderDetail(){const it=current, d=$("detail");const reviewable=["in_re
     if(it.video_state==="stale"&&!it.active_jobs.length)parts.push(el("div",{class:"note warn",text:"The video is older than the script or footage. It is rendered again when you save or approve."}));
     if(v&&v.checks)parts.push(el("table",{},...v.checks.map(c=>el("tr",{},el("td",{},el("span",{class:"chip "+(c.ok?"ok":"warn"),text:c.ok?"ok":"check"})),el("td",{text:c.check}),el("td",{text:c.detail})))));
     if(!locked)parts.push(el("p",{},el("button",{class:"btn small",text:v?"Render again":"Render preview",onclick:async e=>{e.target.disabled=true;e.target.textContent="Rendering…";try{if(dirty)await api("/items/"+it.id,"PATCH",{title:draft.title,body:draft.body,link:draft.link,gaps:draft.gaps,note:"reviewer edit"});const r=await api(`/items/${it.id}/render`,"POST");dirty=false;if(r.job)await watchJob(r.job.id,e.target);toast("Rendered");await refresh(it.id)}catch(err){toast(err.message);e.target.disabled=false;e.target.textContent="Render again"}}})))}
+  if(!it.parent_id){parts.push(el("h2",{text:"Series from this piece"}),el("div",{id:"series"}));setTimeout(()=>drawSeries(it),0)}
   parts.push(el("h2",{text:"Copy"}));const body=editor(draft.body,v=>draft.body=v,"");if(locked)body.querySelectorAll("textarea,input,button").forEach(n=>n.disabled=true);parts.push(body);
   const link=el("input",{type:"url",placeholder:"https://…"});link.value=draft.link;link.disabled=locked;link.addEventListener("input",()=>{draft.link=link.value;touch()});
   parts.push(el("div",{class:"field"},el("label",{text:"Link (tracking tags are added automatically)"}),link,it.tracked_link?el("div",{class:"count",text:it.tracked_link}):null));
@@ -219,6 +230,26 @@ function renderDetail(){const it=current, d=$("detail");const reviewable=["in_re
   d.replaceChildren(...parts,bar);d.scrollTop=0}
 async function watchJob(id,button){for(let i=0;i<200;i++){const j=await api("/jobs/"+id);if(j.status==="done")return j;if(j.status==="failed")throw new Error(j.error);
   if(button)button.textContent=`Rendering… ${i*3}s`;await new Promise(r=>setTimeout(r,3000))}throw new Error("Still running; reload in a minute.")}
+const KIND_LABEL={thread:"Threads",post:"Posts",carousel:"Carousels",short_video:"Short videos",newsletter:"Newsletters"};
+function seriesGrid(values,onChange){const state={},start={};for(const v of values)start[v.kind+"|"+v.channel]=state[v.kind+"|"+v.channel]=v.count;
+  const cell=(kind,ch)=>{const key=kind+"|"+ch;const out=el("output",{text:String(state[key]||0)}),box=el("span",{class:"step"});
+    const set=n=>{state[key]=Math.max(0,Math.min(12,n));out.textContent=String(state[key]);box.className="step"+(state[key]?" on":"")+((state[key]||0)!==(start[key]||0)?" changed":"");if(onChange)onChange()};
+    box.append(el("button",{type:"button","aria-label":"fewer",text:"−",onclick:()=>set((state[key]||0)-1)}),out,el("button",{type:"button","aria-label":"more",text:"+",onclick:()=>set((state[key]||0)+1)}));set(state[key]||0);return box};
+  const table=el("table",{class:"grid"},...me.derivatives.map(d=>el("tr",{},el("td",{style:"white-space:nowrap;font-weight:600",text:KIND_LABEL[d.kind]||d.kind}),
+    el("td",{},el("div",{style:"display:flex;gap:14px;flex-wrap:wrap"},...d.channels.map(c=>el("label",{style:"display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:13px"},c,cell(d.kind,c))))))));
+  return {node:table,plan:()=>Object.entries(state).map(([k,count])=>({kind:k.split("|")[0],channel:k.split("|")[1],count})),total:()=>Object.values(state).reduce((a,b)=>a+b,0)}}
+async function drawSeries(it){const box=$("series");if(!box||!current||current.id!==it.id)return;try{const s=await api(`/items/${it.id}/series`);if(!$("series")||current.id!==it.id)return;
+  const summary=el("span",{class:"count"});let grid=null;grid=seriesGrid(s.uses_recipe?s.recipe:s.current,()=>{summary.textContent=`${grid?grid.total():0} piece(s) in this series`});summary.textContent=`${grid.total()} piece(s) in this series`;
+  const parts=[];if(s.uses_recipe)parts.push(el("div",{class:"note warn",text:"Suggested from the project's default series. Nothing is planned until you press Update series."}));
+  parts.push(grid.node,el("div",{class:"entry",style:"align-items:center;margin-top:6px"},el("button",{class:"btn primary",text:"Update series",onclick:async()=>{try{const r=await api(`/items/${it.id}/series`,"PUT",{plan:grid.plan()});toast(`${r.added} added, ${r.removed} removed`+(r.kept.length?`. Kept: ${r.kept.join("; ")}`:""));drawSeries(it)}catch(e){toast(e.message)}}}),summary));
+  if(s.children.length)parts.push(el("table",{style:"margin-top:10px"},...s.children.map(c=>el("tr",{style:"cursor:pointer",onclick:()=>{if(leaveOk())open(c.id)}},el("td",{text:"#"+c.id}),el("td",{text:(KIND_LABEL[c.kind]||c.kind).replace(/s$/,"")+" · "+c.channel}),el("td",{text:c.title}),
+    el("td",{},el("span",{class:"chip "+(["approved","scheduled","published"].includes(c.status)?"ok":c.status==="planned"?"":"warn"),text:c.status==="planned"?"to write":c.status.replace("_"," ")}))))));
+  box.replaceChildren(...parts)}catch(e){box.replaceChildren(el("div",{class:"note bad",text:e.message}))}}
+function showImport(){if(!leaveOk())return;current=null;dirty=false;renderList();const projects=[...$("project").options].filter(o=>o.value);const proj=el("select",{},...projects.map(o=>el("option",{value:o.value,text:o.textContent})));if($("project").value)proj.value=$("project").value;
+  const url=el("input",{type:"url",placeholder:"https://yoursite.com/blog/your-guide"}),title=el("input",{type:"text",placeholder:"Leave empty to use the page's title"}),text=el("textarea",{rows:"6",placeholder:"Optional. Paste the article text if the page can't be read automatically."});
+  $("detail").replaceChildren(el("h2",{text:"Import a published piece as an anchor"}),el("p",{style:"color:var(--muted)",text:"For something already live. It is recorded as published, skips review and posting, and gets the project's default series, which you can then adjust."}),
+    el("div",{class:"field"},el("label",{text:"Project"}),proj),el("div",{class:"field"},el("label",{text:"Address"}),url),el("div",{class:"field"},el("label",{text:"Title"}),title),el("div",{class:"field"},el("label",{text:"Text"}),text),
+    el("button",{class:"btn primary",text:"Import",onclick:async e=>{e.target.disabled=true;try{const it=await api(`/projects/${proj.value}/import`,"POST",{url:url.value,title:title.value,markdown:text.value});toast("Imported");tab=TABS.findIndex(t=>t[1]==="__anchors");renderTabs();await refresh(it.id)}catch(err){toast(err.message);e.target.disabled=false}}}))}
 async function drawSlides(it){const strip=$("slides"),state=$("slideState");if(!strip||!current||current.id!==it.id)return;
   try{const p=await api(`/items/${it.id}/preview`,"POST",{body:draft.body});if(!$("slides")||current.id!==it.id)return;
     strip.replaceChildren(...p.html.map(h=>{const f=el("iframe",{sandbox:"",title:"Slide preview",scrolling:"no"});f.srcdoc=h;return el("div",{class:"slide"},f)}));
@@ -239,7 +270,7 @@ async function renderInsights(project){$("list").replaceChildren(el("div",{class
   for(const[name,rows]of Object.entries(perf.by_attribute))parts.push(el("h2",{text:"By "+label(name)}),el("table",{},el("tr",{},...["Value","Posts","Vs. typical","Likely range","Verdict","Suggested share"].map(h=>el("th",{text:h}))),...rows.map(r=>el("tr",{},...[r.value,r.posts,r.typical_multiple+"×",r.range[0]+"× – "+r.range[1]+"×",r.verdict,Math.round(r.suggested_share*100)+"%"].map(v=>el("td",{text:String(v)}))))));
   d.replaceChildren(...parts)}
 $("loginForm").addEventListener("submit",e=>{e.preventDefault();token=$("tokenInput").value.trim();localStorage.setItem("cmsbot_token",token);start()});
-$("logout").addEventListener("click",signOut);
+$("logout").addEventListener("click",signOut);$("importBtn").addEventListener("click",showImport);
 $("project").addEventListener("change",()=>{if(leaveOk())refresh()});$("channel").addEventListener("change",()=>{if(leaveOk())refresh()});
 document.addEventListener("keydown",e=>{if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){const b=$("approveBtn");if(b){e.preventDefault();b.click()}return}
   if(/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)||!current)return;const i=items.findIndex(x=>x.id===current.id);

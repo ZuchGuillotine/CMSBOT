@@ -44,6 +44,17 @@ COST_CATEGORIES = ("llm", "image", "video", "audio", "tool", "subscription", "hu
 POST_LIMITS = {"x": 280, "threads": 500, "linkedin": 3000, "instagram": 2200, "tiktok": 2200, "facebook": 2000}
 
 
+# What can be made from an anchor, and where it can go. The series planner offers exactly these.
+DERIVATIVES: dict[str, tuple[str, ...]] = {
+    "thread": ("x", "threads"),
+    "post": ("linkedin", "facebook", "reddit", "instagram"),
+    "carousel": ("instagram", "linkedin", "tiktok"),
+    "short_video": ("tiktok", "instagram", "youtube", "linkedin"),
+    "newsletter": ("email",),
+}
+MAX_PER_CELL = 12
+ANCHOR_KINDS = ("blog", "newsletter")
+
 SETTINGS: dict[str, dict[str, str]] = {
     "XAI_API_KEY": {"label": "xAI API key", "kind": "secret", "group": "Generation", "help": "Grok Imagine stills and video."},
     "OPENROUTER_API_KEY": {"label": "OpenRouter API key", "kind": "secret", "group": "Generation", "help": "Seedance video."},
@@ -393,6 +404,118 @@ class Hub:
         self._event(actor, "cluster_created", project=project, detail={"cluster_id": cluster_id, "origin": origin})
         return self.db.one("SELECT * FROM clusters WHERE id = ?", (cluster_id,)) or {}
 
+    # ---- series: an anchor and the pieces made from it ----------------------------------------
+
+    @staticmethod
+    def _clean_plan(plan: list[dict[str, Any]]) -> dict[tuple[str, str], int]:
+        out: dict[tuple[str, str], int] = {}
+        for row in plan or []:
+            kind, channel = str(row.get("kind", "")), str(row.get("channel", ""))
+            if channel not in DERIVATIVES.get(kind, ()):
+                raise HubError(f"'{kind}' on '{channel}' is not something the planner offers.")
+            try:
+                count = int(row.get("count", 0))
+            except (TypeError, ValueError) as exc:
+                raise HubError("Counts must be whole numbers.") from exc
+            if not 0 <= count <= MAX_PER_CELL:
+                raise HubError(f"Counts go from 0 to {MAX_PER_CELL}.")
+            out[(kind, channel)] = count
+        return out
+
+    def set_recipe(self, actor: Actor, project: str, recipe: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The project's default series: what each new anchor gets unless someone chooses otherwise."""
+        self._manageable(actor, project)
+        row = self._project(project)
+        clean = [{"kind": k, "channel": c, "count": n} for (k, c), n in self._clean_plan(recipe).items() if n]
+        self.db.update("projects", "slug", project, {"settings": {**row["settings"], "recipe": clean}})
+        return clean
+
+    def series(self, actor: Actor, anchor_id: int) -> dict[str, Any]:
+        anchor = self._item(actor, anchor_id)
+        if anchor["parent_id"]:
+            raise HubError(f"Item {anchor_id} is itself made from #{anchor['parent_id']}; plan the series on that one.")
+        children = self.db.all("SELECT id, kind, channel, title, status, scheduled_at FROM items WHERE parent_id = ? AND status != 'rejected' "
+                               "ORDER BY kind, channel, id", (anchor_id,))
+        counts: dict[tuple[str, str], int] = {}
+        for child in children:
+            counts[(child["kind"], child["channel"])] = counts.get((child["kind"], child["channel"]), 0) + 1
+        recipe = self._project(anchor["project"])["settings"].get("recipe") or []
+        return {
+            "anchor": {"id": anchor["id"], "title": anchor["title"], "status": anchor["status"], "project": anchor["project"]},
+            "options": [{"kind": k, "channels": list(c)} for k, c in DERIVATIVES.items()],
+            "current": [{"kind": k, "channel": c, "count": n} for (k, c), n in sorted(counts.items())],
+            "recipe": recipe, "uses_recipe": not children and bool(recipe), "children": children,
+        }
+
+    def plan_series(self, actor: Actor, anchor_id: int, plan: list[dict[str, Any]]) -> dict[str, Any]:
+        """Set how many of each piece this anchor should have. Adds planned items for a drafting agent to write;
+        removes only planned items nobody has started. Anything drafted, in review or posted is left alone."""
+        self._require(actor, "admin", "generator")
+        anchor = self._item(actor, anchor_id)
+        if anchor["parent_id"]:
+            raise HubError("Plan the series on the anchor, not on one of its pieces.")
+        wanted = self._clean_plan(plan)
+        link = anchor["link"] or ((self.db.one("SELECT post_url FROM publications WHERE item_id = ? ORDER BY id DESC LIMIT 1",
+                                               (anchor_id,)) or {}).get("post_url") or "")
+        added, removed, kept = 0, 0, []
+        for (kind, channel), count in wanted.items():
+            existing = self.db.all("SELECT id, status, body FROM items WHERE parent_id = ? AND kind = ? AND channel = ? "
+                                   "AND status != 'rejected' ORDER BY id", (anchor_id, kind, channel))
+            for number in range(len(existing) + 1, count + 1):
+                stamp = now_iso()
+                label = kind.replace("_", " ").capitalize()
+                self.db.insert("items", {
+                    "project": anchor["project"], "cluster_id": anchor["cluster_id"], "parent_id": anchor_id, "kind": kind,
+                    "channel": channel, "title": f"{label} {number} from: {anchor['title']}"[:300], "link": link,
+                    "audit": {"brief": f"Write {label.lower()} {number} of {count} for {channel} from anchor #{anchor_id}. "
+                                       "Take a different angle from the others in this series."},
+                    "status": "planned", "created_by": actor.name, "created_at": stamp, "updated_at": stamp})
+                added += 1
+            surplus = len(existing) - count
+            for child in reversed(existing):
+                if surplus <= 0:
+                    break
+                if child["status"] == "planned" and not child["body"]:
+                    self.db.execute("DELETE FROM events WHERE item_id = ?", (child["id"],))
+                    self.db.execute("DELETE FROM items WHERE id = ?", (child["id"],))
+                    removed += 1
+                    surplus -= 1
+            if surplus > 0:
+                kept.append(f"{surplus} {kind.replace('_', ' ')} on {channel} already started and kept")
+        self._event(actor, "series_planned", item=anchor, detail={"added": added, "removed": removed})
+        return {**self.series(actor, anchor_id), "added": added, "removed": removed, "kept": kept}
+
+    def import_published(self, actor: Actor, project: str, *, url: str, title: str, markdown: str,
+                         published_at: str | None = None, cluster_id: int | None = None) -> dict[str, Any]:
+        """Bring in a piece that is already live so a series can be made from it. It is recorded as published and
+        never enters review or posting. Its claims still need a person to verify them where the project requires it."""
+        self._require(actor, "admin", "generator")
+        self._scope(actor, project)
+        self._project(project)
+        if not url.startswith(("http://", "https://")):
+            raise HubError("Give the public address of the published piece.")
+        if not title.strip() or not markdown.strip():
+            raise HubError("The piece needs a title and its text.")
+        existing = self.db.one("SELECT id FROM items WHERE project = ? AND external_ref = ?", (project, f"import:{url}"))
+        if existing:
+            raise HubError(f"That address was already imported as item {existing['id']}.", 409)
+        stamp = now_iso()
+        posted = parse_iso(published_at).strftime("%Y-%m-%dT%H:%M:%SZ") if published_at else stamp
+        item_id = self.db.insert("items", {
+            "project": project, "cluster_id": cluster_id, "kind": "blog", "channel": "blog", "title": title.strip()[:300],
+            "body": {"markdown": markdown.strip()}, "link": url, "status": "published", "external_ref": f"import:{url}",
+            "audit": {"imported": {"by": actor.name, "at": stamp, "from": url}}, "created_by": actor.name,
+            "created_at": stamp, "updated_at": stamp})
+        item = self._item(actor, item_id)
+        self._revision(actor, item, "imported")
+        self.db.insert("publications", {"item_id": item_id, "channel": "blog", "account": "", "post_url": url, "post_id": "",
+                                        "posted_at": posted, "posted_by": "imported"})
+        self._event(actor, "imported", item=item, detail={"url": url})
+        recipe = self._project(project)["settings"].get("recipe") or []
+        if recipe:
+            self.plan_series(actor, item_id, recipe)
+        return self.get_item(actor, item_id)
+
     # ---- brief: everything a drafting agent needs before it writes -------------------------
 
     def brief(self, actor: Actor, project: str) -> dict[str, Any]:
@@ -415,6 +538,8 @@ class Hub:
             "signals": self.list_signals(actor, project, status="new"),
             "items_by_status": {r["status"]: r["n"] for r in counts},
             "needs_revision": open_feedback,
+            "to_write": self.db.all("SELECT id, kind, channel, title, parent_id, audit FROM items WHERE project = ? AND status = 'planned' "
+                                    "ORDER BY id LIMIT 100", (project,)),
             "spend": self.spend(actor, project),
         }
 
@@ -578,7 +703,8 @@ class Hub:
         item = self._item(actor, item_id)
         if item["parent_id"]:
             raise HubError("Claims live on the anchor item, not on a derivative.")
-        if actor.role == "generator" and item["status"] not in AGENT_EDITABLE:
+        imported = item["status"] == "published" and bool(item["audit"].get("imported"))
+        if actor.role == "generator" and item["status"] not in AGENT_EDITABLE and not imported:
             raise HubError("Claims can't be replaced once the item is with the reviewer.", 409)
         keep = {c["text"]: c for c in self.db.all("SELECT * FROM claims WHERE item_id = ?", (item_id,))}
         self.db.execute("DELETE FROM claims WHERE item_id = ?", (item_id,))
@@ -672,11 +798,14 @@ class Hub:
         return tracked_link(item["link"], channel=item["channel"], campaign=(cluster or {}).get("slug", ""), item_id=item["id"])
 
     def list_items(self, actor: Actor, *, project: str | None = None, status: str | None = None,
-                   channel: str | None = None, kind: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+                   channel: str | None = None, kind: str | None = None, limit: int = 200,
+                   anchors: bool = False) -> list[dict[str, Any]]:
         if actor.role == "distributor":
             raise HubError("Posting agents use ready_to_post, which only returns approved copy.", 403)
         project = actor.project or project
         clauses, params = ["1=1"], []
+        if anchors:
+            clauses.append("parent_id IS NULL AND (kind IN ('blog', 'newsletter') OR id IN (SELECT parent_id FROM items WHERE parent_id IS NOT NULL))")
         for column, value in (("project", project), ("channel", channel), ("kind", kind)):
             if value:
                 clauses.append(f"{column} = ?")

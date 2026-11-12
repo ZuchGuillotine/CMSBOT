@@ -21,6 +21,9 @@ Needs: the `cmsbot-hub` tools.
    derivatives per channel. Use `performance(project)` for the mix: follow `suggested_share` for
    formats and hooks, and act only on verdicts of "above baseline" or "below baseline". Anything
    marked "not enough data" still gets its share; that is how it earns enough data.
+   The number of pieces per anchor is the owner's choice, not yours: each project has a default
+   series (its recipe) and the owner adjusts single anchors in the Hub. Plan anchors; the series
+   follows from the recipe.
 5. Create each cluster with `create_cluster`, then one planned item per piece with `save_draft`
    (pass `body={}` so it stays "planned", put the brief in `audit.brief`, and set `attributes`:
    `hook`, `format`, `style`, `persona`, `length`). Attributes are what analysis compares later, so

@@ -9,6 +9,20 @@ Needs: the `cmsbot-hub` tools. Uses your own writing ability; no model API key i
 headless pipeline, `cmsbot generate --method multipass` and `cmsbot derive`, remains for unattended
 API runs; send its output with `cmsbot hub push`.)
 
+## What to write
+`get_brief(project)` lists `needs_revision` (do these first) and `to_write`: pieces a person has
+planned, each with a kind, a channel, the anchor it comes from (`parent_id`) and a one-line brief in
+`audit.brief`. Write exactly those. Do not add pieces nobody planned; if the owner asks for more or
+fewer from an anchor, change the plan with `plan_series(anchor_id, [{kind, channel, count}])` and
+then write what it lists. Fill a planned piece with `save_draft(item_id=...)`.
+
+Within one anchor's series, give every piece its own angle: a different claim, objection, example or
+reader question. Read the sibling titles in `get_series(anchor_id)` first so two threads do not say
+the same thing.
+
+For a piece that is already live, `import_published(project, url)` brings it in as an anchor. Then
+call `set_claims` on it with every factual claim the series might repeat, before writing any piece.
+
 ## Revisions first
 `list_items(project, status="needs_revision,failed")`. For each, `get_item`, read `review_notes`,
 change what the note asks and nothing else, `save_draft(item_id=...)`, `submit_for_review`. If you

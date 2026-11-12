@@ -99,6 +99,11 @@ Done in step 6:
 - Rendering and generation run as background jobs with a status call; found on the first live run,
   where a 70-second render outlived a 30-second proxy limit.
 
+Done in step 7:
+- Anchors and series: a default series per project, a per-anchor planner with counts per content
+  type and channel, the anchor's tree of pieces with status, and import of already-published pieces.
+- First live generation run (still, clip, render) and the fixes it led to.
+
 Not done yet, in order:
 
 1. **Stand it up.** Host the Hub, create tokens, connect Claude and Grok Bot. Verify Grok Bot's
