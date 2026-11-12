@@ -29,32 +29,39 @@ review, agents hand work over, and results come back.
 
 ## Run it
 
+Nothing has to be built or put in an `.env` file. Start the container with a folder for its data:
+
 ```bash
-pip install -e ".[hub]"
-cmsbot hub init --reviewer "your name"
+docker run -d --name cmsbot-hub --restart=always -p 8787:8787 -v cmsbot-hub-data:/data ghcr.io/zuchguillotine/cmsbot-hub:latest
 ```
 
 ```bash
-cmsbot hub serve
+docker logs cmsbot-hub
 ```
 
-Open http://127.0.0.1:8787 and paste the reviewer token. Then, in another shell:
+The log shows a one-time setup code. Open the Hub in a browser, enter the code and your name, and
+you get the first reviewer token. Everything else is done on the **Settings** tab:
+
+- **Access tokens:** create one per person or agent, with a role and optionally one project and an
+  expiry. Each is shown once, with ready-to-paste connection details. Rotate replaces a token and
+  withdraws the old one at once; Revoke withdraws it. The last all-projects reviewer can't be revoked.
+- **Provider keys:** xAI, OpenRouter and ElevenLabs keys, for the whole Hub or for one project (a
+  project's own key wins). Saved encrypted, never displayed again, with a Test button.
+- **Projects:** add a project and set its monthly budget, media cap per item, and whether claims
+  must be verified.
+
+The published image is built from `main` by `.github/workflows/hub-image.yml`. To build it yourself
+instead: `docker build -t cmsbot-hub .`. To run without Docker: `pip install -e ".[hub]"` then
+`cmsbot hub serve` (rendering then needs ffmpeg and a headless Chrome on the machine).
+
+A project's brand kit and pillars are loaded from its `project.json`:
 
 ```bash
-export CMSBOT_HUB_TOKEN=<reviewer token>
-cmsbot hub project projects/example-project.json --budget 100
+export CMSBOT_HUB_URL=https://<your-hub> CMSBOT_HUB_TOKEN=<reviewer token>
 ```
 
 ```bash
-cmsbot hub token create claude-weekly --role generator
-```
-
-```bash
-cmsbot hub token create grok-bot --role distributor
-```
-
-```bash
-cmsbot hub token create analyst --role analyst
+cmsbot hub project projects/<slug>.json --budget 100
 ```
 
 Send existing pipeline output for review (safe to re-run):
@@ -65,21 +72,18 @@ cmsbot hub push output/asset-sets/2026/2026-11/<asset-set-id> --project <slug> -
 
 ## Host it
 
-It is one process and one file, shared by all projects, so it needs the smallest instance a host
-sells plus a persistent disk for `/data`. That is typically a few dollars a month in total, not per
-project; check your host's current prices. Nothing else is required: no managed database, no queue.
+One process and one data folder serve every project, so it needs the smallest instance a host
+sells with a persistent disk for `/data`: a few dollars a month in total, not per project. No
+managed database or queue. Put HTTPS in front (the host's TLS, or Caddy) and set
+`CMSBOT_HUB_PUBLIC_URL=https://<your-hub>` so posting agents get full media links. Keep `/data`
+on local disk, run one container against it, and back it up: it holds the database, the media and
+`secret.key`, which decrypts the stored provider keys. Anyone with a copy of that whole folder can
+read those keys, so treat backups of it as sensitive. Cloud agents such as Grok Bot can only reach
+a Hub that has a public HTTPS address.
 
-```bash
-docker build -t cmsbot-hub .
-```
-
-```bash
-docker run -p 8787:8787 -v cmsbot-hub-data:/data cmsbot-hub
-```
-
-Serve it over HTTPS (the host's built-in TLS is enough). Back up `/data/hub.sqlite3`.
-It can run on a laptop while you evaluate it; cloud agents such as Grok Bot can only reach it once
-it has a public HTTPS address.
+Optional environment variables: `CMSBOT_HUB_SECRET_KEY` (supply the encryption key yourself instead
+of the generated file, for example from a secret manager), the `CMSBOT_MEDIA_*` bucket settings
+below, and provider keys by name as a fallback when nothing is saved in Settings.
 
 ## Media files
 
@@ -152,40 +156,23 @@ place and every agent can use them without holding a key.
 Rules: nothing is generated before a person approves the script; each item has a media cap
 (project setting `item_media_cap_usd`, default $10); the project's `monthly_budget_usd` is a hard
 stop; every call is written to the cost record against the item. Costs are the provider's reported
-figure when it gives one (OpenRouter does), otherwise an estimate from the `CMSBOT_RATE_*` values;
-set those to your real rates.
+figure when it gives one (OpenRouter does), otherwise an estimate from the rates on the Settings
+tab; set those to your real prices.
 
-Put the keys in a file only root can read and pass it to the container:
-
-```bash
-sudo install -m 600 /dev/null /srv/cmsbot-hub/hub.env
-```
-
-```bash
-sudo nano /srv/cmsbot-hub/hub.env
-```
-
-```bash
-docker run ... --env-file /srv/cmsbot-hub/hub.env ...
-```
-
-The file holds lines such as `XAI_API_KEY=...`, `OPENROUTER_API_KEY=...`, `ELEVENLABS_API_KEY=...`.
-A managed secret store (AWS Secrets Manager, SSM Parameter Store) is worth it once the Hub runs
-somewhere with an instance role, such as ECS or EC2; on a single Lightsail box the server would
-need a stored AWS key to read it, which protects nothing extra.
+A reviewer enters the keys on the Settings tab. They are encrypted in the Hub's database with a
+key kept beside it (or supplied as `CMSBOT_HUB_SECRET_KEY`), shown afterwards only as their last four
+characters, and never sent to an agent. Use Test after saving. A project that has its own provider
+account can have its own key, so its spend lands on its own bill.
 
 ## Who can see what
 
 Every token has a role and, optionally, one project. A token limited to a project can't read or
 change anything in another: items, briefs, signals, learnings, spend and settings are all checked.
 
-```bash
-cmsbot hub token create "dana (haidaa)" --role admin --project haidaa
-```
-
-That reviewer signs in to the same review page and sees only Haidaa. Do the same for agents: a
-Grok Bot that posts for one project gets `--role distributor --project <slug>`. Tokens are stored
-hashed, shown once, and revoked with `cmsbot hub token revoke <id>`; `token list` shows who holds what.
+On the Settings tab, create a reviewer token with a project chosen. That person signs in to the
+same page and sees only that project, and can hand out or withdraw access to it and nothing else.
+Do the same for agents: a Grok Bot that posts for one project gets a distributor token for that
+project. Tokens are stored hashed, shown once, can expire, and show when they were last used.
 
 ## Where credentials live
 
@@ -194,11 +181,11 @@ Each secret stays with the one party that uses it. The Hub and the repo hold non
 | Secret | Lives in | Never in |
 |---|---|---|
 | Social account logins and API keys (X, Meta, LinkedIn, TikTok) | The posting agent's own secret store (Grok Bot's connected apps and secrets) | The Hub, the repo, a brand kit |
-| Image, video and voice generation keys (xAI, OpenRouter for Seedance, ElevenLabs) | The Hub host's environment, in a root-only file outside the repo and image | Any agent, the repo, a brand kit |
+| Image, video and voice generation keys (xAI, OpenRouter for Seedance, ElevenLabs) | The Hub, entered under Settings and stored encrypted | Any agent, the repo, a brand kit |
 | Text model keys, only if the unattended API pipeline is used | That runner's environment or an untracked local `.env` | The Hub, the repo |
 | Analytics access (GA4, Mixpanel, Search Console, Ahrefs) | The analysis agent's connectors (signed in by the owner) | The Hub, the repo |
 | Media bucket keys | The Hub host's environment variables | Any agent |
-| Hub tokens | One per agent, in that agent's secret store | The repo; another agent |
+| Hub tokens | Created under Settings, one per agent, kept in that agent's secret store | The repo; another agent |
 
 What goes in the repo is only non-secret configuration: account handles, property ids, pillar names.
 The Hub is what lets agents work together without sharing secrets: they exchange drafts, approvals

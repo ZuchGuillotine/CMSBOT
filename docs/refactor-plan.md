@@ -87,6 +87,12 @@ Done in step 4:
 - Generation through the Hub: footage and voiceover tools with a per-item cap, the monthly budget
   as a hard stop, a no-spend-before-script-approval rule, and automatic cost records.
 
+Done in step 5:
+- Settings tab: access tokens (create, rotate, revoke, expiry, last used), provider keys stored
+  encrypted per Hub or per project, and projects with budgets.
+- First-run setup with a one-time code, and a workflow that publishes the Hub image, so a new
+  user runs one container and configures everything in the browser.
+
 Not done yet, in order:
 
 1. **Stand it up.** Host the Hub, create tokens, connect Claude and Grok Bot. Verify Grok Bot's

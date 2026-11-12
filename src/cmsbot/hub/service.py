@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import secrets
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from cmsbot import carousel, video
 from cmsbot.hub import stats
 from cmsbot.hub.store import Store, now_iso, parse_iso
+from cmsbot.hub.vault import Vault
 
 ROLES = ("admin", "generator", "distributor", "analyst")
 CHANNELS = ("blog", "email", "x", "threads", "instagram", "linkedin", "tiktok", "facebook", "reddit", "youtube")
@@ -40,6 +42,20 @@ MAX_ATTEMPTS = 3
 CLAIM_LEASE = timedelta(minutes=30)
 COST_CATEGORIES = ("llm", "image", "video", "audio", "tool", "subscription", "human", "other")
 POST_LIMITS = {"x": 280, "threads": 500, "linkedin": 3000, "instagram": 2200, "tiktok": 2200, "facebook": 2000}
+
+
+SETTINGS: dict[str, dict[str, str]] = {
+    "XAI_API_KEY": {"label": "xAI API key", "kind": "secret", "group": "Generation", "help": "Grok Imagine stills and video."},
+    "OPENROUTER_API_KEY": {"label": "OpenRouter API key", "kind": "secret", "group": "Generation", "help": "Seedance video."},
+    "ELEVENLABS_API_KEY": {"label": "ElevenLabs API key", "kind": "secret", "group": "Generation", "help": "Voiceover with word timings."},
+    "ELEVENLABS_VOICE_ID": {"label": "ElevenLabs voice id", "kind": "text", "group": "Generation", "help": "Default voice for voiceovers."},
+    "CMSBOT_SEEDANCE_MODEL": {"label": "Seedance model id", "kind": "text", "group": "Generation",
+                              "help": "Leave empty to use the newest Seedance model OpenRouter lists."},
+    "CMSBOT_RATE_XAI_IMAGE": {"label": "Grok still, $ each", "kind": "number", "group": "Rates for spend checks"},
+    "CMSBOT_RATE_XAI_VIDEO_PER_SECOND": {"label": "Grok video, $ per second", "kind": "number", "group": "Rates for spend checks"},
+    "CMSBOT_RATE_SEEDANCE_PER_SECOND": {"label": "Seedance, $ per second", "kind": "number", "group": "Rates for spend checks"},
+    "CMSBOT_RATE_ELEVENLABS_PER_1K_CHARS": {"label": "ElevenLabs, $ per 1,000 characters", "kind": "number", "group": "Rates for spend checks"},
+}
 
 
 class HubError(Exception):
@@ -91,30 +107,165 @@ class Hub:
     def __init__(self, store: Store, public_url: str = ""):
         self.db = store
         self.public_url = public_url.rstrip("/")  # so posting agents get fetchable media links
+        self.vault = Vault(store.path)
 
     # ---- tokens -------------------------------------------------------------------------
 
-    def create_token(self, name: str, role: str, project: str | None = None) -> str:
+    def create_token(self, name: str, role: str, project: str | None = None, *, expires_in_days: float | None = None,
+                     created_by: str = "") -> str:
         if role not in ROLES:
             raise HubError(f"Unknown role '{role}'. Use one of: {', '.join(ROLES)}")
+        if not name.strip():
+            raise HubError("Give the token a name: who or what will use it.")
         if project:
             self._project(project)
         token = f"cms_{role[:3]}_{secrets.token_urlsafe(32)}"
-        self.db.insert("tokens", {"name": name, "role": role, "project": project,
-                                  "token_hash": hash_token(token), "created_at": now_iso()})
+        expires = (datetime.now(timezone.utc) + timedelta(days=expires_in_days)).strftime("%Y-%m-%dT%H:%M:%SZ") if expires_in_days else None
+        self.db.insert("tokens", {"name": name.strip(), "role": role, "project": project or None, "token_hash": hash_token(token),
+                                  "created_at": now_iso(), "expires_at": expires, "created_by": created_by})
         return token
 
     def authenticate(self, token: str) -> Actor | None:
         if not token:
             return None
         row = self.db.one("SELECT * FROM tokens WHERE token_hash = ? AND revoked = 0", (hash_token(token),))
-        return Actor(row["name"], row["role"], row["project"]) if row else None
+        if not row or (row["expires_at"] and row["expires_at"] < now_iso()):
+            return None
+        stamp = now_iso()
+        if (row["last_used_at"] or "")[:16] != stamp[:16]:  # at most one write a minute per token
+            self.db.update("tokens", "id", row["id"], {"last_used_at": stamp})
+        return Actor(row["name"], row["role"], row["project"])
 
-    def list_tokens(self) -> list[dict[str, Any]]:
-        return self.db.all("SELECT id, name, role, project, created_at, revoked FROM tokens ORDER BY id")
+    def list_tokens(self, actor: Actor | None = None) -> list[dict[str, Any]]:
+        rows = self.db.all("SELECT id, name, role, project, created_at, created_by, last_used_at, expires_at, revoked "
+                           "FROM tokens ORDER BY revoked, id DESC")
+        if actor is not None:
+            self._require(actor, "admin")
+            rows = [r for r in rows if not actor.project or r["project"] == actor.project]
+        for row in rows:
+            row["expired"] = bool(row["expires_at"]) and row["expires_at"] < now_iso()
+        return rows
 
-    def revoke_token(self, token_id: int) -> None:
+    def _manageable(self, actor: Actor, project: str | None) -> None:
+        """A reviewer limited to one project can only hand out or withdraw access to that project."""
+        self._require(actor, "admin")
+        if actor.project and project != actor.project:
+            raise HubError(f"This token can only manage access to '{actor.project}'.", 403)
+
+    def issue_token(self, actor: Actor, name: str, role: str, project: str | None = None,
+                    expires_in_days: float | None = None) -> dict[str, Any]:
+        self._manageable(actor, project or None)
+        token = self.create_token(name, role, project or None, expires_in_days=expires_in_days, created_by=actor.name)
+        row = self.db.one("SELECT id, name, role, project, expires_at FROM tokens WHERE token_hash = ?", (hash_token(token),)) or {}
+        self._event(actor, "token_created", project=project or None, detail={"name": name, "role": role})
+        return {**row, "token": token}
+
+    def revoke_token(self, token_id: int, actor: Actor | None = None) -> None:
+        row = self.db.one("SELECT * FROM tokens WHERE id = ?", (token_id,))
+        if not row:
+            raise HubError(f"No token {token_id}.", 404)
+        if actor is not None:
+            self._manageable(actor, row["project"])
+        if row["role"] == "admin" and not row["project"] and not row["revoked"]:
+            others = self.db.one("SELECT COUNT(*) AS n FROM tokens WHERE role = 'admin' AND project IS NULL AND revoked = 0 "
+                                 "AND id != ? AND (expires_at IS NULL OR expires_at > ?)", (token_id, now_iso()))
+            if not (others or {}).get("n"):
+                raise HubError("This is the last reviewer token for all projects. Create another before revoking it, "
+                               "or nobody can sign in.", 409)
         self.db.update("tokens", "id", token_id, {"revoked": 1})
+        if actor is not None:
+            self._event(actor, "token_revoked", project=row["project"], detail={"name": row["name"], "role": row["role"]})
+
+    def rotate_token(self, actor: Actor, token_id: int) -> dict[str, Any]:
+        """Issue a replacement with the same name, role and project, then withdraw the old one."""
+        row = self.db.one("SELECT * FROM tokens WHERE id = ? AND revoked = 0", (token_id,))
+        if not row:
+            raise HubError(f"No active token {token_id}.", 404)
+        self._manageable(actor, row["project"])
+        remaining = None
+        if row["expires_at"]:
+            remaining = max(1.0, (parse_iso(row["expires_at"]) - parse_iso(row["created_at"])).total_seconds() / 86400)
+        fresh = self.issue_token(actor, row["name"], row["role"], row["project"], remaining)
+        self.db.update("tokens", "id", token_id, {"revoked": 1})
+        return fresh
+
+    # ---- first-run setup --------------------------------------------------------------------
+
+    def needs_setup(self) -> bool:
+        return not self.db.one("SELECT id FROM tokens WHERE role = 'admin' AND project IS NULL AND revoked = 0 LIMIT 1")
+
+    def setup_code(self) -> str | None:
+        """A one-time code for creating the first reviewer, shown in the server log. None once set up."""
+        if not self.needs_setup():
+            return None
+        code = secrets.token_urlsafe(12)
+        self.db.execute("INSERT INTO meta (key, value) VALUES ('setup_code', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (hash_token(code),))
+        return code
+
+    def complete_setup(self, code: str, reviewer: str) -> str:
+        stored = self.db.one("SELECT value FROM meta WHERE key = 'setup_code'")
+        if not self.needs_setup() or not stored:
+            raise HubError("This Hub is already set up. Sign in with a reviewer token.", 409)
+        if not secrets.compare_digest(stored["value"], hash_token(code.strip())):
+            raise HubError("That setup code is not right. It is printed in the Hub's log when it starts.", 403)
+        token = self.create_token(reviewer or "reviewer", "admin", created_by="setup")
+        self.db.execute("DELETE FROM meta WHERE key = 'setup_code'")
+        return token
+
+    # ---- provider keys and other settings ---------------------------------------------------
+
+    def set_setting(self, actor: Actor, name: str, value: str, project: str | None = None) -> dict[str, Any]:
+        self._manageable(actor, project or None)
+        if name not in SETTINGS:
+            raise HubError(f"Unknown setting '{name}'.")
+        if project:
+            self._project(project)
+        value = value.strip()
+        if not value:
+            raise HubError("The value is empty. Use remove to clear a setting.")
+        if SETTINGS[name]["kind"] == "number":
+            try:
+                float(value)
+            except ValueError as exc:
+                raise HubError(f"{SETTINGS[name]['label']} must be a number.") from exc
+        hint = f"…{value[-4:]}" if SETTINGS[name]["kind"] == "secret" and len(value) > 8 else ("set" if SETTINGS[name]["kind"] == "secret" else value)
+        self.db.execute("DELETE FROM settings WHERE project = ? AND name = ?", (project or "", name))
+        self.db.insert("settings", {"project": project or "", "name": name, "sealed": self.vault.seal(value), "hint": hint,
+                                    "updated_by": actor.name, "updated_at": now_iso()})
+        self._event(actor, "setting_changed", project=project or None, detail={"name": name})
+        return {"name": name, "project": project or "", "hint": hint}
+
+    def clear_setting(self, actor: Actor, name: str, project: str | None = None) -> None:
+        self._manageable(actor, project or None)
+        self.db.execute("DELETE FROM settings WHERE project = ? AND name = ?", (project or "", name))
+        self._event(actor, "setting_removed", project=project or None, detail={"name": name})
+
+    def setting(self, name: str, project: str | None = None) -> str | None:
+        """Internal: the value in effect. A project's own value, then the Hub-wide one, then the environment."""
+        for scope in ([project, ""] if project else [""]):
+            row = self.db.one("SELECT sealed FROM settings WHERE project = ? AND name = ?", (scope, name))
+            if row:
+                value = self.vault.open(row["sealed"])
+                if value:
+                    return value
+        return os.environ.get(name) or None
+
+    def list_settings(self, actor: Actor, project: str | None = None) -> list[dict[str, Any]]:
+        """Never returns a secret's value: only whether it is set, its last four characters, and who set it."""
+        self._manageable(actor, project or None)
+        stored = {(r["project"], r["name"]): r for r in self.db.all("SELECT project, name, hint, updated_by, updated_at FROM settings")}
+        out = []
+        for name, spec in SETTINGS.items():
+            own = stored.get((project or "", name))
+            inherited = stored.get(("", name)) if project else None
+            source = "this project" if own and project else "hub" if (own or inherited) else "environment" if os.environ.get(name) else ""
+            row = own or inherited
+            out.append({"name": name, "label": spec["label"], "kind": spec["kind"], "group": spec["group"], "help": spec.get("help", ""),
+                        "source": source, "hint": (row or {}).get("hint", "set" if source == "environment" else ""),
+                        "updated_by": (row or {}).get("updated_by", ""), "updated_at": (row or {}).get("updated_at", ""),
+                        "own": bool(own)})
+        return out
 
     # ---- guards -------------------------------------------------------------------------
 

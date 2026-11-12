@@ -14,6 +14,7 @@ import contextlib
 import contextvars
 import functools
 import os
+import sys
 from importlib import resources
 from typing import Any
 
@@ -286,6 +287,11 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
 
     app = FastAPI(title="CMSBOT Hub", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.state.hub = hub
+    setup_attempts = {"left": 10}
+    code = hub.setup_code()
+    if code:  # a fresh Hub: the first reviewer is created in the browser with this one-time code
+        print(f"\nCMSBOT Hub first-time setup code: {code}\nOpen the Hub in a browser and enter it to create the first reviewer.\n",
+              file=sys.stderr, flush=True)
 
     @app.exception_handler(HubError)
     async def hub_error(_: Request, exc: HubError):
@@ -308,6 +314,57 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     @app.get("/healthz")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/setup")
+    def setup_state() -> dict[str, bool]:
+        return {"needed": hub.needs_setup()}
+
+    @app.post("/api/setup")
+    def setup(body: dict[str, Any] = Body(...)) -> dict[str, str]:
+        if setup_attempts["left"] <= 0:
+            raise HubError("Too many wrong codes. Restart the Hub to get a new setup code.", 429)
+        try:
+            return {"token": hub.complete_setup(str(body.get("code", "")), str(body.get("name", "")).strip())}
+        except HubError as exc:
+            if exc.status == 403:
+                setup_attempts["left"] -= 1
+            raise
+
+    @app.get("/api/tokens")
+    def tokens(actor: Actor = Depends(who)):
+        return hub.list_tokens(actor)
+
+    @app.post("/api/tokens")
+    def post_token(body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        days = body.get("expires_in_days")
+        return hub.issue_token(actor, str(body.get("name", "")), str(body.get("role", "")), body.get("project") or None,
+                               float(days) if days else None)
+
+    @app.post("/api/tokens/{token_id}/{action}")
+    def token_action(token_id: int, action: str, actor: Actor = Depends(who)):
+        if action == "rotate":
+            return hub.rotate_token(actor, token_id)
+        if action == "revoke":
+            hub.revoke_token(token_id, actor)
+            return {"id": token_id, "revoked": True}
+        raise HubError(f"Unknown action '{action}'.", 404)
+
+    @app.get("/api/settings")
+    def get_settings(project: str | None = None, actor: Actor = Depends(who)):
+        return hub.list_settings(actor, project or actor.project)
+
+    @app.put("/api/settings/{name}")
+    def put_setting(name: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.set_setting(actor, name, str(body.get("value", "")), body.get("project") or actor.project)
+
+    @app.delete("/api/settings/{name}")
+    def delete_setting(name: str, project: str | None = None, actor: Actor = Depends(who)):
+        hub.clear_setting(actor, name, project or actor.project)
+        return {"name": name, "removed": True}
+
+    @app.post("/api/settings/{name}/test")
+    def test_setting(name: str, project: str | None = None, actor: Actor = Depends(who)):
+        return generation.test_key(hub, actor, name, project or actor.project)
 
     @app.get("/api/me")
     def me(actor: Actor = Depends(who)) -> dict[str, Any]:

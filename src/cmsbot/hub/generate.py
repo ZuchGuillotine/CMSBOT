@@ -1,14 +1,14 @@
 """Paid media generation, done by the Hub so that provider keys, spend caps and the cost record live
 in one place. Agents ask for a shot or a voiceover; they never hold the keys.
 
-Keys are read from the Hub's environment (see docs/hub.md):
+Keys are entered by a reviewer under Settings (stored encrypted), per project or for the whole Hub;
+environment variables of the same names still work as a fallback:
   XAI_API_KEY           Grok Imagine stills and video
   OPENROUTER_API_KEY    Seedance video (model from CMSBOT_SEEDANCE_MODEL, or the newest Seedance listed)
   ELEVENLABS_API_KEY    voiceover with word timings (voice from the brand kit or ELEVENLABS_VOICE_ID)
 
 Rates used for the spend check are estimates unless the provider reports a cost; override them with
-CMSBOT_RATE_XAI_IMAGE, CMSBOT_RATE_XAI_VIDEO_PER_SECOND, CMSBOT_RATE_SEEDANCE_PER_SECOND,
-CMSBOT_RATE_ELEVENLABS_PER_1K_CHARS.
+the rate settings.
 """
 
 from __future__ import annotations
@@ -32,9 +32,12 @@ POLL_SECONDS, POLL_LIMIT_SECONDS = 5, 600
 MAX_CLIP_SECONDS = 12
 
 
-def _rate(name: str, default: float) -> float:
+Config = Callable[[str], "str | None"]  # looks a setting up: the project's value, the Hub's, then the environment
+
+
+def _rate(cfg: Config, name: str, default: float) -> float:
     try:
-        return float(os.environ.get(f"CMSBOT_RATE_{name}", default))
+        return float(cfg(f"CMSBOT_RATE_{name}") or default)
     except ValueError:
         return default
 
@@ -73,8 +76,8 @@ def _poll(fetch: Callable[[], dict[str, Any]], done: tuple[str, ...], failed: tu
 
 # ---- providers --------------------------------------------------------------------------------
 
-def xai_image(prompt: str, **_: Any) -> Result:
-    key = os.environ["XAI_API_KEY"]
+def xai_image(prompt: str, *, cfg: Config, **_: Any) -> Result:
+    key = cfg("XAI_API_KEY")
     with httpx.Client(timeout=180) as client:
         data = _check(client.post("https://api.x.ai/v1/images/generations", headers={"Authorization": f"Bearer {key}"},
                                   json={"model": os.environ.get("CMSBOT_XAI_IMAGE_MODEL", "grok-imagine-image-pro"),
@@ -82,8 +85,8 @@ def xai_image(prompt: str, **_: Any) -> Result:
     return Result(base64.b64decode(data["data"][0]["b64_json"]), ".png", "image/png")
 
 
-def xai_video(prompt: str, *, seconds: int, first_frame_url: str = "", **_: Any) -> Result:
-    key = os.environ["XAI_API_KEY"]
+def xai_video(prompt: str, *, cfg: Config, seconds: int, first_frame_url: str = "", **_: Any) -> Result:
+    key = cfg("XAI_API_KEY")
     headers = {"Authorization": f"Bearer {key}"}
     body: dict[str, Any] = {"model": os.environ.get("CMSBOT_XAI_VIDEO_MODEL", "grok-imagine-video-1.5"),
                             "prompt": prompt, "duration": seconds}
@@ -98,12 +101,12 @@ def xai_video(prompt: str, *, seconds: int, first_frame_url: str = "", **_: Any)
     return Result(clip.content, ".mp4", "video/mp4")
 
 
-def seedance_video(prompt: str, *, seconds: int, first_frame_url: str = "", **_: Any) -> Result:
-    key = os.environ["OPENROUTER_API_KEY"]
+def seedance_video(prompt: str, *, cfg: Config, seconds: int, first_frame_url: str = "", **_: Any) -> Result:
+    key = cfg("OPENROUTER_API_KEY")
     headers = {"Authorization": f"Bearer {key}"}
     base = "https://openrouter.ai/api/v1/videos"
     with httpx.Client(timeout=120) as client:
-        model = os.environ.get("CMSBOT_SEEDANCE_MODEL", "")
+        model = cfg("CMSBOT_SEEDANCE_MODEL") or ""
         if not model:
             listed = _check(client.get(f"{base}/models", headers=headers), "OpenRouter")
             entries = listed.get("data", listed) if isinstance(listed, dict) else listed
@@ -145,8 +148,8 @@ def words_from_alignment(alignment: dict[str, Any]) -> list[dict[str, Any]]:
     return words
 
 
-def elevenlabs_voice(text: str, *, voice_id: str, **_: Any) -> Result:
-    key = os.environ["ELEVENLABS_API_KEY"]
+def elevenlabs_voice(text: str, *, cfg: Config, voice_id: str, **_: Any) -> Result:
+    key = cfg("ELEVENLABS_API_KEY")
     with httpx.Client(timeout=300) as client:
         data = _check(client.post(f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/with-timestamps",
                                   headers={"xi-api-key": key}, params={"output_format": "mp3_44100_128"},
@@ -158,18 +161,44 @@ def elevenlabs_voice(text: str, *, voice_id: str, **_: Any) -> Result:
 
 PROVIDERS: dict[str, dict[str, Any]] = {
     "grok-image": {"kind": "image", "env": "XAI_API_KEY", "run": xai_image, "category": "image", "vendor": "xai",
-                   "estimate": lambda seconds, chars: _rate("XAI_IMAGE", 0.07)},
+                   "estimate": lambda cfg, seconds, chars: _rate(cfg, "XAI_IMAGE", 0.07)},
     "grok-video": {"kind": "video", "env": "XAI_API_KEY", "run": xai_video, "category": "video", "vendor": "xai",
-                   "estimate": lambda seconds, chars: seconds * _rate("XAI_VIDEO_PER_SECOND", 0.50)},
+                   "estimate": lambda cfg, seconds, chars: seconds * _rate(cfg, "XAI_VIDEO_PER_SECOND", 0.50)},
     "seedance": {"kind": "video", "env": "OPENROUTER_API_KEY", "run": seedance_video, "category": "video", "vendor": "seedance",
-                 "estimate": lambda seconds, chars: seconds * _rate("SEEDANCE_PER_SECOND", 0.50)},
+                 "estimate": lambda cfg, seconds, chars: seconds * _rate(cfg, "SEEDANCE_PER_SECOND", 0.50)},
     "elevenlabs": {"kind": "voice", "env": "ELEVENLABS_API_KEY", "run": elevenlabs_voice, "category": "audio", "vendor": "elevenlabs",
-                   "estimate": lambda seconds, chars: chars / 1000 * _rate("ELEVENLABS_PER_1K_CHARS", 0.30)},
+                   "estimate": lambda cfg, seconds, chars: chars / 1000 * _rate(cfg, "ELEVENLABS_PER_1K_CHARS", 0.30)},
 }
 
 
-def configured(kind: str | None = None) -> list[str]:
-    return [name for name, spec in PROVIDERS.items() if os.environ.get(spec["env"]) and (kind is None or spec["kind"] == kind)]
+def _config(hub: Hub, project: str) -> Config:
+    return lambda name: hub.setting(name, project)
+
+
+def configured(cfg: Config, kind: str | None = None) -> list[str]:
+    return [name for name, spec in PROVIDERS.items() if cfg(spec["env"]) and (kind is None or spec["kind"] == kind)]
+
+
+def test_key(hub: Hub, actor: Actor, name: str, project: str | None = None) -> dict[str, Any]:
+    """Make one free, read-only call with a stored key, so a wrong key is found now and not mid-render."""
+    hub._manageable(actor, project or None)
+    probes = {
+        "XAI_API_KEY": ("https://api.x.ai/v1/models", lambda key: {"Authorization": f"Bearer {key}"}),
+        "OPENROUTER_API_KEY": ("https://openrouter.ai/api/v1/key", lambda key: {"Authorization": f"Bearer {key}"}),
+        "ELEVENLABS_API_KEY": ("https://api.elevenlabs.io/v1/user", lambda key: {"xi-api-key": key}),
+    }
+    if name not in probes:
+        raise HubError("Only provider keys can be tested.")
+    key = hub.setting(name, project)
+    if not key:
+        raise HubError("That key is not set.", 404)
+    url, headers = probes[name]
+    try:
+        status = httpx.get(url, headers=headers(key), timeout=20).status_code
+    except httpx.HTTPError as exc:
+        return {"name": name, "ok": False, "detail": f"Could not reach the provider: {exc}"}
+    return {"name": name, "ok": status < 300,
+            "detail": "The provider accepted the key." if status < 300 else f"The provider answered {status}; the key is probably wrong or lacks access."}
 
 
 # ---- spend rules ------------------------------------------------------------------------------
@@ -181,7 +210,7 @@ def options(hub: Hub, actor: Actor, item_id: int) -> dict[str, Any]:
     cap = float(settings.get("item_media_cap_usd", DEFAULT_ITEM_CAP_USD))
     spend = hub.spend(actor, item["project"])
     return {
-        "providers": {name: {"kind": PROVIDERS[name]["kind"]} for name in configured()},
+        "providers": {name: {"kind": PROVIDERS[name]["kind"]} for name in configured(_config(hub, item["project"]))},
         "item_cap_usd": cap, "item_spent_usd": item["cost_usd"], "item_remaining_usd": round(cap - item["cost_usd"], 2),
         "project_month": spend,
         "script_approved": bool(item["audit"].get("script_approved")),
@@ -206,17 +235,16 @@ def _authorise(hub: Hub, actor: Actor, item: dict[str, Any], estimate: float) ->
         raise HubError(f"The project's monthly budget (${month['monthly_budget_usd']}) has no room for about ${estimate:.2f}.", 402)
 
 
-def _pick(kind: str, provider: str) -> tuple[str, dict[str, Any]]:
-    available = configured(kind)
+def _pick(cfg: Config, kind: str, provider: str) -> tuple[str, dict[str, Any]]:
+    available = configured(cfg, kind)
     if provider:
         if provider not in PROVIDERS or PROVIDERS[provider]["kind"] != kind:
             raise HubError(f"'{provider}' is not a {kind} provider. Options: {', '.join(n for n, s in PROVIDERS.items() if s['kind'] == kind)}")
         if provider not in available:
-            raise HubError(f"{provider} has no key on this Hub ({PROVIDERS[provider]['env']}).", 503)
+            raise HubError(f"{provider} has no key on this Hub. A reviewer can add it under Settings.", 503)
         return provider, PROVIDERS[provider]
     if not available:
-        needed = sorted({s["env"] for s in PROVIDERS.values() if s["kind"] == kind})
-        raise HubError(f"No {kind} provider is configured on this Hub. Set one of: {', '.join(needed)}.", 503)
+        raise HubError(f"No {kind} provider has a key on this Hub. A reviewer can add one under Settings.", 503)
     return available[0], PROVIDERS[available[0]]
 
 
@@ -252,14 +280,15 @@ def generate_footage(hub: Hub, storage, actor: Actor, item_id: int, *, shot: int
     if not prompt.strip():
         raise HubError("Write the prompt for this shot.")
     seconds = max(2, min(int(seconds), MAX_CLIP_SECONDS))
-    name, spec = _pick(kind, provider)
-    estimate = round(spec["estimate"](seconds, 0), 4)
+    cfg = _config(hub, item["project"])
+    name, spec = _pick(cfg, kind, provider)
+    estimate = round(spec["estimate"](cfg, seconds, 0), 4)
     _authorise(hub, actor, item, estimate)
     role = f"shot-{shot:02d}"
     still = next((m["url"] for m in item["media"] if isinstance(m, dict) and m.get("role") == role
                   and re.search(r"\.(png|jpe?g|webp)$", str(m.get("url", "")), re.IGNORECASE)), "")
     try:
-        result = spec["run"](prompt.strip(), seconds=seconds,
+        result = spec["run"](prompt.strip(), cfg=cfg, seconds=seconds,
                              first_frame_url=_absolute(hub, still) if (kind == "video" and from_still and still) else "")
     except ProviderError as exc:
         raise HubError(str(exc), 502) from exc
@@ -280,15 +309,16 @@ def generate_voiceover(hub: Hub, storage, actor: Actor, item_id: int, *, voice_i
         raise HubError("Voiceover is generated for short_video items.")
     brand = hub.brand(item["project"])
     voice_id = voice_id or ((brand.get("voiceover") or {}).get("voice_id") if isinstance(brand.get("voiceover"), dict) else "") \
-        or os.environ.get("ELEVENLABS_VOICE_ID", "")
+        or hub.setting("ELEVENLABS_VOICE_ID", item["project"]) or ""
     if not voice_id:
-        raise HubError("No voice chosen. Set voiceover.voice_id in the project's brand kit, or ELEVENLABS_VOICE_ID on the Hub.")
+        raise HubError("No voice chosen. A reviewer can set the ElevenLabs voice id under Settings.")
     text = " ".join(s["narration"] for s in video.normalize(item["body"]) if s["narration"])
-    name, spec = _pick("voice", provider)
-    estimate = round(spec["estimate"](0, len(text)), 4)
+    cfg = _config(hub, item["project"])
+    name, spec = _pick(cfg, "voice", provider)
+    estimate = round(spec["estimate"](cfg, 0, len(text)), 4)
     _authorise(hub, actor, item, estimate)
     try:
-        result = spec["run"](text, voice_id=voice_id)
+        result = spec["run"](text, cfg=cfg, voice_id=voice_id)
     except ProviderError as exc:
         raise HubError(str(exc), 502) from exc
     except httpx.HTTPError as exc:

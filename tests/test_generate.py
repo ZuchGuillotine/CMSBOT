@@ -18,7 +18,8 @@ def ctx(tmp_path, monkeypatch):
     item = hub.create_item(GEN, "acme", kind="short_video", channel="tiktok", title="V", body=BODY)
     calls = []
 
-    def fake_video(prompt, *, seconds, first_frame_url="", **_):
+    def fake_video(prompt, *, cfg, seconds, first_frame_url="", **_):
+        assert cfg("OPENROUTER_API_KEY") == "or-key"
         calls.append(("video", prompt, seconds, first_frame_url))
         return generate.Result(b"mp4", ".mp4", "video/mp4", cost_usd=1.25)
 
@@ -32,9 +33,11 @@ def ctx(tmp_path, monkeypatch):
 
     for name, fn in (("seedance", fake_video), ("grok-image", fake_image), ("elevenlabs", fake_voice)):
         monkeypatch.setitem(generate.PROVIDERS[name], "run", fn)
-    for env in ("XAI_API_KEY", "OPENROUTER_API_KEY", "ELEVENLABS_API_KEY"):
-        monkeypatch.setenv(env, "test")
-    monkeypatch.delenv("CMSBOT_RATE_SEEDANCE_PER_SECOND", raising=False)
+    for env in ("XAI_API_KEY", "OPENROUTER_API_KEY", "ELEVENLABS_API_KEY", "CMSBOT_RATE_SEEDANCE_PER_SECOND"):
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setenv("XAI_API_KEY", "from-env")           # environment fallback
+    hub.set_setting(ADMIN, "OPENROUTER_API_KEY", "or-key")  # Hub-wide, entered in Settings
+    hub.set_setting(ADMIN, "ELEVENLABS_API_KEY", "el-key-123456", "acme")  # this project only
     return hub, LocalStorage(tmp_path), item["id"], calls
 
 
@@ -89,10 +92,10 @@ def test_missing_key_and_wrong_provider_are_explained(ctx, monkeypatch):
     hub, storage, item, _ = ctx
     hub.submit(GEN, item)
     hub.approve_script(ADMIN, item)
-    monkeypatch.delenv("OPENROUTER_API_KEY")
+    hub.clear_setting(ADMIN, "OPENROUTER_API_KEY")
     with pytest.raises(HubError) as missing:
         generate.generate_footage(hub, storage, GEN, item, shot=1, prompt="x", provider="seedance")
-    assert "OPENROUTER_API_KEY" in str(missing.value)
+    assert "Settings" in str(missing.value)
     with pytest.raises(HubError):
         generate.generate_footage(hub, storage, GEN, item, shot=1, prompt="x", provider="elevenlabs")
     with pytest.raises(HubError):

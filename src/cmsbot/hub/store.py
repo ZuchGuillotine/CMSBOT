@@ -77,7 +77,17 @@ CREATE TABLE IF NOT EXISTS learnings (
 CREATE TABLE IF NOT EXISTS tokens (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, role TEXT NOT NULL, project TEXT,
   token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS settings (
+  id INTEGER PRIMARY KEY, project TEXT NOT NULL DEFAULT '', name TEXT NOT NULL, sealed TEXT NOT NULL,
+  hint TEXT NOT NULL DEFAULT '', updated_by TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(project, name));
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
+# Columns added after the first release: (table, column, definition)
+MIGRATIONS = [
+    ("tokens", "last_used_at", "TEXT"),
+    ("tokens", "expires_at", "TEXT"),
+    ("tokens", "created_by", "TEXT NOT NULL DEFAULT ''"),
+]
 
 JSON_COLUMNS = {
     "brand", "settings", "keywords", "body", "media", "attributes", "gaps", "audit",
@@ -109,6 +119,9 @@ class Store:
         if self.path != ":memory:":
             self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(SCHEMA)
+        for table, column, definition in MIGRATIONS:
+            if column not in {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}:
+                self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     @staticmethod
     def _decode(row: sqlite3.Row) -> dict[str, Any]:
