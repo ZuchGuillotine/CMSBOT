@@ -104,6 +104,10 @@ Done in step 7:
   type and channel, the anchor's tree of pieces with status, and import of already-published pieces.
 - First live generation run (still, clip, render) and the fixes it led to.
 
+Done in step 8:
+- Brand tab: voice, look and accounts per project, colours read from uploaded pictures or the
+  site's styles, live slide preview, and agent-drafted kits that a reviewer accepts.
+
 Not done yet, in order:
 
 1. **Stand it up.** Host the Hub, create tokens, connect Claude and Grok Bot. Verify Grok Bot's

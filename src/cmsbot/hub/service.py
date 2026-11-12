@@ -404,6 +404,38 @@ class Hub:
         self._event(actor, "cluster_created", project=project, detail={"cluster_id": cluster_id, "origin": origin})
         return self.db.one("SELECT * FROM clusters WHERE id = ?", (cluster_id,)) or {}
 
+    # ---- brand kit ------------------------------------------------------------------------------
+
+    def get_brand(self, actor: Actor, project: str) -> dict[str, Any]:
+        self._scope(actor, project)
+        row = self._project(project)
+        return {"project": project, "name": row["name"], "brand": row["brand"], "draft": row["settings"].get("brand_draft")}
+
+    def set_brand(self, actor: Actor, project: str, incoming: dict[str, Any], *, name: str | None = None) -> dict[str, Any]:
+        from cmsbot.hub import brand as brand_kit
+
+        self._manageable(actor, project)
+        row = self._project(project)
+        values: dict[str, Any] = {"brand": brand_kit.clean(incoming, row["brand"]),
+                                  "settings": {k: v for k, v in row["settings"].items() if k != "brand_draft"}}
+        if name and name.strip():
+            values["name"] = name.strip()[:120]
+        self.db.update("projects", "slug", project, values)
+        self._event(actor, "brand_saved", project=project)
+        return self.get_brand(actor, project)
+
+    def propose_brand(self, actor: Actor, project: str, incoming: dict[str, Any]) -> dict[str, Any]:
+        """An agent's draft of the brand kit. It changes nothing until a person loads and saves it."""
+        from cmsbot.hub import brand as brand_kit
+
+        self._require(actor, "admin", "generator", "analyst")
+        self._scope(actor, project)
+        row = self._project(project)
+        draft = {**brand_kit.clean(incoming, {}), "proposed_by": actor.name, "proposed_at": now_iso()}
+        self.db.update("projects", "slug", project, {"settings": {**row["settings"], "brand_draft": draft}})
+        self._event(actor, "brand_proposed", project=project)
+        return {"project": project, "status": "waiting for a reviewer to accept it on the Brand tab"}
+
     # ---- series: an anchor and the pieces made from it ----------------------------------------
 
     @staticmethod

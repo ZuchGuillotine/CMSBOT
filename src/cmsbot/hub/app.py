@@ -30,7 +30,9 @@ from cmsbot.hub.service import (
     Hub,
     HubError,
 )
-from cmsbot.hub import fetch
+from cmsbot import carousel
+from cmsbot.hub import brand as brand_kit
+from cmsbot.hub import fetch, palette
 from cmsbot.hub import generate as generation
 from cmsbot.hub import jobs
 from cmsbot.hub import render as rendering
@@ -132,6 +134,16 @@ def build_mcp(hub: Hub, storage, do_import=None):
         return hub.create_cluster(actor(), project, name, pillar=pillar or None, theme=theme, keywords=keywords,
                                   starts_on=starts_on or None, ends_on=ends_on or None, origin=origin,
                                   signal_id=signal_id or None)
+
+    @tool
+    def propose_brand(project: str, brand: dict[str, Any]) -> dict[str, Any]:
+        """Draft a project's brand kit for its reviewer to accept on the Brand tab; nothing changes until they save it.
+        Fields: website, description, tone (how it sounds, in plain sentences with 'sounds like / never sounds like'
+        examples quoted from the brand's own writing), lexicon {prefer: [], avoid: []}, disallowed_claims [], ctas [],
+        visual {wordmark, footer, colors {base, glow, ink, muted, accent, accent2 as #rrggbb}},
+        personas {channel: {account, type: brand|character, who, disclosure}}. Base it on the brand's real site and
+        published writing, quoting its phrases; do not invent a personality."""
+        return hub.propose_brand(actor(), project, brand)
 
     @tool
     def import_published(project: str, url: str, title: str = "", markdown: str = "") -> dict[str, Any]:
@@ -500,6 +512,53 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     @app.put("/api/items/{item_id}/series")
     def put_series(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
         return hub.plan_series(actor, item_id, body.get("plan", []))
+
+    @app.get("/api/projects/{slug}/brand")
+    def get_brand(slug: str, actor: Actor = Depends(who)):
+        return hub.get_brand(actor, slug)
+
+    @app.put("/api/projects/{slug}/brand")
+    def put_brand(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return hub.set_brand(actor, slug, body.get("brand", {}), name=body.get("name"))
+
+    @app.post("/api/projects/{slug}/brand/scan")
+    def scan_brand(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        hub._manageable(actor, slug)
+        return brand_kit.scan_site(str(body.get("url", "")).strip())
+
+    @app.post("/api/projects/{slug}/brand/images")
+    async def brand_image(slug: str, request: Request, name: str = Query(...), actor: Actor = Depends(who)):
+        """Upload a palette picture, mood image or logo. Returns where it is stored and the colours found in it."""
+        hub._manageable(actor, slug)
+        hub._project(slug)
+        content_type = content_type_for(name, request.headers.get("content-type", ""))
+        if not content_type.startswith("image/"):
+            raise HubError("Upload a picture (PNG, JPG or WebP).")
+        data = await request.body()
+        if not data or len(data) > 15 * 1024 * 1024:
+            raise HubError("The picture is empty or larger than 15 MB.", 413)
+        try:
+            colours = palette.from_image(data)
+        except Exception as exc:  # noqa: BLE001 - any unreadable file is the user's to replace
+            raise HubError("That file could not be read as a picture.") from exc
+        url = storage.put(media_key(slug, "brand", name), data, content_type)
+        return {"url": url, "colors_found": colours, "suggested_colors": palette.suggest_theme(colours)}
+
+    @app.post("/api/projects/{slug}/brand/preview")
+    def preview_brand(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        """How slides would look with the brand as currently filled in (before saving)."""
+        hub._scope(actor, slug)
+        draft = brand_kit.clean(body.get("brand", {}), hub._project(slug)["brand"])
+        name = str(body.get("name") or hub._project(slug)["name"])
+        cta = (draft.get("ctas") or ["Find out more"])[0]
+        sample = {"topic_tag": "PREVIEW", "slides": [
+            {"type": "cover", "eyebrow": "How your slides will look", "headline": (draft.get("description") or name)[:70],
+             "dek": "Headline, supporting line and labels in your colours and fonts."},
+            {"type": "evidence", "label": "ACCENTS AND TEXT", "rows": [
+                {"claim": "Accent colour marks what matters", "strength": 3, "note": "Muted text carries the detail"},
+                {"claim": "Second accent for contrast", "strength": 1, "note": "Used sparingly"}]},
+            {"type": "cta", "headline": cta, "button": cta}]}
+        return carousel.build_slides(sample, {"name": name, **draft})
 
     @app.put("/api/projects/{slug}/recipe")
     def put_recipe(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):

@@ -85,6 +85,25 @@ Optional environment variables: `CMSBOT_HUB_SECRET_KEY` (supply the encryption k
 of the generated file, for example from a secret manager), the `CMSBOT_MEDIA_*` bucket settings
 below, and provider keys by name as a fallback when nothing is saved in Settings.
 
+## Brand kit
+
+Each project has a brand kit on the **Brand** tab. Everything that writes or designs for the project
+reads it: drafting agents get it in every brief, the writing checks use its words to avoid, and
+slides and videos are drawn in its colours, fonts and logo.
+
+- **Site or app link:** "Read site" fills in the name and description and lists the colours used in
+  the site's stylesheets, with a suggested assignment and a logo candidate.
+- **Voice:** a free-text description of the tone, words to use and to avoid, things never to claim,
+  and calls to action.
+- **Look:** upload palette or mood pictures; the Hub reads the colours from each. Click a role
+  (background, text, accent...) and then a swatch, or use the colour pickers. A live slide preview
+  shows the result before saving. Pictures are kept as reference for image and video prompts.
+- **Accounts:** per channel, the handle, whether it posts as the brand or as a consistent character,
+  and any disclosure needed when the product is mentioned.
+
+An agent can draft a kit with `propose_brand`; it appears as a banner on the Brand tab and changes
+nothing until a reviewer loads it and saves.
+
 ## Anchors and their series
 
 An anchor is the piece that holds the facts, usually a blog post or guide. Everything made from it

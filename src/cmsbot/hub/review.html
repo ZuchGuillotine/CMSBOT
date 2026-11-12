@@ -56,6 +56,12 @@ details summary{cursor:pointer;color:var(--muted)}
 .step button{border:0;background:none;width:28px;height:30px;cursor:pointer;font-size:16px;color:var(--muted)}.step button:hover{background:var(--chip)}
 .step output{min-width:26px;text-align:center;font-variant-numeric:tabular-nums}.step.on{border-color:var(--accent)}.step.on output{font-weight:700;color:var(--accent)}
 .step.changed{box-shadow:0 0 0 2px var(--warn-bg)}
+.swatches{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.sw{width:30px;height:30px;border-radius:6px;border:1px solid var(--line);cursor:pointer;padding:0}
+.sw.picked{outline:2px solid var(--accent);outline-offset:2px}
+.roles{display:grid;grid-template-columns:repeat(3,minmax(150px,1fr));gap:10px}.role{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:6px 8px;background:var(--panel);cursor:pointer}
+.role.target{border-color:var(--accent);box-shadow:0 0 0 2px var(--ok-bg)}.role input[type=color]{width:34px;height:30px;border:0;padding:0;background:none}
+.refs{display:flex;gap:10px;flex-wrap:wrap}.ref{border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--panel);max-width:260px}.ref img{max-height:90px;max-width:100%;border-radius:4px;display:block;margin-bottom:6px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media (max-width:760px){.two,.roles{grid-template-columns:1fr}}
 #login{max-width:380px;margin:12vh auto;background:var(--panel);padding:24px;border-radius:12px;border:1px solid var(--line)}
 #toast{position:fixed;top:14px;right:14px;background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;display:none;z-index:9;max-width:60vw}
 @media (max-width:760px){main{grid-template-columns:1fr;height:auto}#list{max-height:38vh;border-right:0;border-bottom:1px solid var(--line)}.actions{left:0}}
@@ -91,7 +97,7 @@ details summary{cursor:pointer;color:var(--muted)}
 </main>
 </div>
 <script>
-const TABS=[["Needs review","in_review"],["Anchors","__anchors"],["Approved","approved,scheduled,posting"],["In progress","planned,drafting,needs_revision,failed"],["Posted","published"],["Rejected","rejected"],["Insights",""],["Settings",""]];
+const TABS=[["Needs review","in_review"],["Anchors","__anchors"],["Approved","approved,scheduled,posting"],["In progress","planned,drafting,needs_revision,failed"],["Posted","published"],["Rejected","rejected"],["Insights",""],["Brand",""],["Settings",""]];
 const HIDDEN_KEYS=new Set(["claim_ids","claimIds"]);
 let token=localStorage.getItem("cmsbot_token")||"", me=null, tab=0, items=[], current=null, draft=null, dirty=false;
 const $=id=>document.getElementById(id);
@@ -108,6 +114,57 @@ function tokenPanel(t){const url=location.origin+"/mcp";return el("div",{class:"
   el("div",{class:"field"},el("label",{text:"Agents that can only store a URL"}),copyBox(`${url}?token=${t.token}`)),
   el("div",{class:"field"},el("label",{text:"cmsbot command line"}),copyBox(`export CMSBOT_HUB_URL=${location.origin} CMSBOT_HUB_TOKEN=${t.token}`))))}
 const ROLE_HELP={generator:"Drafting agent: creates and edits drafts, generates media. Cannot approve or post.",distributor:"Posting agent: sees approved copy only, marks posts, reports metrics and trends.",analyst:"Reporting agent: reads everything, writes metrics, conversions and proposals.",admin:"Reviewer (a person): edits, approves, manages access and keys."};
+const ROLE_LABEL={base:"Background",glow:"Glow behind headline",ink:"Text",muted:"Secondary text",accent:"Accent",accent2:"Second accent"};
+const DEFAULT_COLORS={glow:"#1f2a44",base:"#0c0f18",accent:"#8fb4ff",accent2:"#f2c46b",ink:"#eef1f8",muted:"#a6adc2"};
+async function renderBrand(project){current=null;dirty=false;const d=$("detail");if(!project){$("list").replaceChildren(el("div",{class:"empty",text:"Pick a project."}));d.replaceChildren();return}
+  const data=await api(`/projects/${project}/brand`);let b=structuredClone(data.brand||{});
+  const lines=v=>(v||[]).join("\n"),split=v=>v.split(/\n/).map(x=>x.trim()).filter(Boolean);
+  const F={};const input=(key,props={})=>{const i=el(props.area?"textarea":"input",{type:"text",rows:props.rows||"3",placeholder:props.placeholder||""});F[key]=i;i.addEventListener("input",()=>{dirty=true;later()});return i};
+  const field=(label,node,help)=>el("div",{class:"field"},el("label",{text:label}),node,help?el("div",{class:"count",style:"text-align:left",text:help}):null);
+  const colors={...DEFAULT_COLORS,...((b.visual||{}).colors||{})};let target="accent";let refs=[...(b.reference_images||[])];let logo=(b.visual||{}).logo_url||"";const found={};
+  const rolesBox=el("div",{class:"roles"}),refsBox=el("div",{class:"refs"}),logoBox=el("div",{class:"entry",style:"align-items:center"}),previewBox=el("div",{class:"slides"}),draftBox=el("div");
+  const drawRoles=()=>rolesBox.replaceChildren(...Object.keys(ROLE_LABEL).map(r=>{const pick=el("input",{type:"color","aria-label":ROLE_LABEL[r]});pick.value=colors[r];pick.addEventListener("input",()=>{colors[r]=pick.value;dirty=true;later()});
+    return el("div",{class:"role"+(target===r?" target":""),title:"Click, then click a swatch to use it here",onclick:e=>{if(e.target!==pick){target=r;drawRoles()}}},pick,el("span",{text:ROLE_LABEL[r]}),el("span",{class:"count",text:colors[r]}))}));
+  const swatches=(list,suggested)=>el("div",{},el("div",{class:"swatches"},...list.map(c=>{const sw=el("button",{type:"button",class:"sw",title:`${c.hex} — use as ${ROLE_LABEL[target]}`});sw.style.background=c.hex;sw.addEventListener("click",()=>{colors[target]=c.hex;dirty=true;drawRoles();later()});return sw})),
+    suggested&&Object.keys(suggested).length?el("button",{class:"btn small",style:"margin-top:6px",text:"Use these colours",onclick:()=>{Object.assign(colors,suggested);dirty=true;drawRoles();later()}}):null);
+  const drawRefs=()=>refsBox.replaceChildren(...refs.map(u=>el("div",{class:"ref"},el("img",{src:u,alt:"Reference"}),found[u]?swatches(found[u].colors,found[u].suggested):el("span",{class:"count",text:"Saved reference"}),
+    el("button",{class:"btn small danger",style:"margin-top:6px",text:"Remove",onclick:()=>{refs=refs.filter(x=>x!==u);dirty=true;drawRefs()}}))));
+  const drawLogo=()=>logoBox.replaceChildren(logo?el("img",{src:logo,alt:"Logo",style:"height:40px;border-radius:4px;background:var(--chip)"}):el("span",{class:"count",text:"No logo; the name is shown as text."}),...(logo?[el("button",{class:"btn small",text:"Remove",onclick:()=>{logo="";dirty=true;drawLogo();later()}})]:[]));
+  const upload=async file=>{const r=await fetch(`/api/projects/${project}/brand/images?name=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Authorization":"Bearer "+token,"Content-Type":file.type||"application/octet-stream"},body:file});const j=await r.json();if(!r.ok)throw new Error(j.error||"Upload failed");return j};
+  const picker=(label,multiple,onFile)=>{const f=el("input",{type:"file",accept:"image/*",style:"display:none"});if(multiple)f.multiple=true;f.addEventListener("change",async()=>{for(const file of f.files){try{await onFile(await upload(file))}catch(e){toast(e.message)}}f.value=""});return el("span",{},f,el("button",{class:"btn",type:"button",text:label,onclick:()=>f.click()}))};
+  const personaRows={};const personaTable=el("table",{},el("tr",{},...["Channel","Account","Presents as","Who is speaking","Disclosure when the product is mentioned"].map(h=>el("th",{text:h}))),...me.channels.filter(c=>c!=="blog"&&c!=="email").map(c=>{const p=(b.personas||{})[c]||{};
+    const acc=el("input",{type:"text",placeholder:"handle"}),type=el("select",{},el("option",{value:"brand",text:"the brand"}),el("option",{value:"character",text:"a consistent character"})),who=el("input",{type:"text"}),dis=el("input",{type:"text"});acc.value=p.account||"";type.value=p.type||"brand";who.value=p.who||"";dis.value=p.disclosure||"";
+    for(const n of [acc,type,who,dis])n.addEventListener("input",()=>{dirty=true});personaRows[c]={acc,type,who,dis};return el("tr",{},el("td",{text:c}),el("td",{},acc),el("td",{},type),el("td",{},who),el("td",{},dis))}));
+  const collect=()=>({website:F.website.value,description:F.description.value,tone:F.tone.value,lexicon:{prefer:split(F.prefer.value),avoid:split(F.avoid.value)},disallowed_claims:split(F.never.value),ctas:split(F.ctas.value),reference_images:refs,
+    visual:{wordmark:F.wordmark.value,footer:F.footer.value,logo_url:logo,colors:{...colors},fonts:{headline:F.fh.value,body:F.fb.value,label:F.fl.value},font_css_url:F.fcss.value},
+    personas:Object.fromEntries(Object.entries(personaRows).map(([c,r])=>[c,{account:r.acc.value,type:r.type.value,who:r.who.value,disclosure:r.dis.value}]))});
+  let timer=null;const preview=async()=>{try{const p=await api(`/projects/${project}/brand/preview`,"POST",{brand:collect(),name:F.name.value});previewBox.replaceChildren(...p.html.map(h=>{const f=el("iframe",{sandbox:"",title:"Preview",scrolling:"no"});f.srcdoc=h;return el("div",{class:"slide"},f)}))}catch(e){previewBox.replaceChildren(el("div",{class:"note bad",text:e.message}))}};
+  const later=()=>{clearTimeout(timer);timer=setTimeout(preview,500)};
+  const fill=(k,extraName)=>{F.website.value=k.website||"";F.description.value=k.description||"";F.tone.value=k.tone||(k.voice||[]).join(", ");F.prefer.value=lines((k.lexicon||{}).prefer);F.avoid.value=lines((k.lexicon||{}).avoid);F.never.value=lines(k.disallowed_claims);F.ctas.value=lines(k.ctas);
+    const v=k.visual||{};F.wordmark.value=v.wordmark||"";F.footer.value=v.footer||"";F.fh.value=(v.fonts||{}).headline||"";F.fb.value=(v.fonts||{}).body||"";F.fl.value=(v.fonts||{}).label||"";F.fcss.value=v.font_css_url||"";if(extraName!==undefined)F.name.value=extraName};
+  const site=input("website",{placeholder:"https://yoursite.com"});const scanResult=el("div");
+  const scanBtn=el("button",{class:"btn",type:"button",text:"Read site",onclick:async e=>{e.target.disabled=true;e.target.textContent="Reading…";try{const r=await api(`/projects/${project}/brand/scan`,"POST",{url:site.value});
+    if(r.description&&!F.description.value)F.description.value=r.description;if(r.name&&!F.wordmark.value)F.wordmark.value=r.name;dirty=true;
+    scanResult.replaceChildren(el("div",{class:"ref",style:"max-width:none;margin-top:8px"},el("div",{class:"count",style:"text-align:left",text:r.colors_found.length?"Colours found in the site's styles. Click a role below, then a swatch; or take the suggestion.":"No colours found in the site's styles."}),swatches(r.colors_found,r.suggested_colors),
+      r.logo_candidate?el("div",{class:"entry",style:"align-items:center;margin-top:8px"},el("img",{src:r.logo_candidate,alt:"",style:"height:40px"}),el("button",{class:"btn small",text:"Use as logo",onclick:()=>{logo=r.logo_candidate;dirty=true;drawLogo();later()}})):null));later()}catch(err){toast(err.message)}e.target.disabled=false;e.target.textContent="Read site"}});
+  if(data.draft)draftBox.replaceChildren(el("div",{class:"note warn"},el("b",{text:`${data.draft.proposed_by} drafted a brand kit for you (${local(data.draft.proposed_at)}). `}),document.createTextNode("Load it into the form to review; nothing changes until you save. "),
+    el("button",{class:"btn small",text:"Load the draft",onclick:()=>{const k=data.draft;fill(k);Object.assign(colors,(k.visual||{}).colors||{});for(const[c,r]of Object.entries(personaRows)){const p=(k.personas||{})[c]||{};r.acc.value=p.account||r.acc.value;r.type.value=p.type||r.type.value;r.who.value=p.who||r.who.value;r.dis.value=p.disclosure||r.dis.value}dirty=true;drawRoles();later();toast("Draft loaded. Review, then save.")}})));
+  const parts=[draftBox,el("h2",{text:"Brand kit"}),el("p",{style:"color:var(--muted);margin:0 0 10px",text:"Everything that writes or designs for this project reads this. Saved changes apply to drafts and renders made from now on."}),
+    el("div",{class:"two"},field("Name as shown",input("name")),field("Site or app link",el("div",{class:"entry"},el("div",{class:"body"},site),scanBtn))),scanResult,
+    field("What it is and who it is for",input("description",{area:true,rows:"3"})),
+    el("h2",{text:"Voice"}),field("Describe the tone",input("tone",{area:true,rows:"6",placeholder:"How should it sound? Who is speaking, to whom? What does it never sound like? Paste a paragraph you like as an example."}),"Plain description works best. Drafting agents read this before every piece."),
+    el("div",{class:"two"},field("Words and phrases to use (one per line)",input("prefer",{area:true})),field("Words and phrases to avoid (one per line)",input("avoid",{area:true}),"Drafts that use these are flagged.")),
+    el("div",{class:"two"},field("Never claim (one per line)",input("never",{area:true})),field("Calls to action (one per line)",input("ctas",{area:true}))),
+    el("h2",{text:"Look"}),el("div",{class:"entry",style:"align-items:center;margin-bottom:8px"},picker("Add palette or mood pictures",true,async r=>{refs.push(r.url);found[r.url]={colors:r.colors_found,suggested:r.suggested_colors};dirty=true;drawRefs()}),el("span",{class:"count",text:"Colours are read from each picture. Pictures are kept as visual reference for image and video prompts."})),refsBox,
+    el("div",{style:"margin:12px 0 6px",class:"count",text:"Click a role, then a swatch, or use the colour pickers."}),rolesBox,
+    el("div",{class:"two",style:"margin-top:12px"},field("Logo",el("div",{},logoBox,picker("Upload logo",false,async r=>{logo=r.url;dirty=true;drawLogo();later()}))),field("Wordmark (text shown when there is no logo)",input("wordmark"))),
+    field("Footer line on slides",input("footer",{placeholder:"e.g. a source line or a short disclaimer"})),
+    el("details",{},el("summary",{text:"Fonts (optional)"}),el("div",{class:"two",style:"margin-top:8px"},field("Headline font",input("fh",{placeholder:"\"Newsreader\", Georgia, serif"})),field("Body font",input("fb",{placeholder:"\"Hanken Grotesk\", Arial, sans-serif"}))),el("div",{class:"two"},field("Label font",input("fl",{placeholder:"\"IBM Plex Mono\", monospace"})),field("Font stylesheet link",input("fcss",{placeholder:"https://fonts.googleapis.com/css2?family=…"})))),
+    el("h2",{text:"Preview"}),previewBox,
+    el("h2",{text:"Accounts and who is speaking"}),el("p",{style:"color:var(--muted);margin:0 0 8px",text:"Per channel: post as the brand, or as a consistent character. Results are compared by this choice on the Insights tab."}),personaTable,
+    el("div",{class:"actions"},el("button",{class:"btn primary",text:"Save brand kit",onclick:async()=>{try{await api(`/projects/${project}/brand`,"PUT",{brand:collect(),name:F.name.value});dirty=false;toast("Brand kit saved");const keep=$("project").value;await start();$("project").value=keep;tab=TABS.findIndex(t=>t[0]==="Brand");renderTabs();renderBrand(keep)}catch(e){toast(e.message)}}}),el("span",{class:"count",text:"Applies to drafts and renders made from now on."}))];
+  d.replaceChildren(...parts);fill(b,data.name);drawRoles();drawRefs();drawLogo();dirty=false;preview();
+  $("list").replaceChildren(el("div",{class:"empty",text:"Voice, look and accounts for "+data.name+"."}))}
 async function renderSettings(){current=null;dirty=false;$("list").replaceChildren(el("div",{class:"empty",text:"Access, provider keys and projects."}));const d=$("detail");
   const [tokens,projects]=await Promise.all([api("/tokens"),api("/projects")]);const scope=me.project||"";const parts=[el("div",{id:"fresh"})];
   const show=t=>{$("fresh").replaceChildren(tokenPanel(t));d.scrollTop=0};const again=()=>renderSettings().catch(e=>toast(e.message));
@@ -155,6 +212,7 @@ async function refresh(keepId){const project=$("project").value;localStorage.set
   $("spend").textContent="";if(project){api(`/projects/${project}/brief`).then(b=>{const s=b.spend;$("spend").textContent=`$${s.total_usd} this month`+(s.monthly_budget_usd?` of $${s.monthly_budget_usd}`:"");$("spend").className="chip"+(s.over_budget?" bad":"")}).catch(()=>{})}
   if(TABS[tab][0]==="Insights")return renderInsights(project);
   if(TABS[tab][0]==="Settings")return renderSettings();
+  if(TABS[tab][0]==="Brand")return renderBrand(project);
   const q=TABS[tab][1]==="__anchors"?new URLSearchParams({anchors:"true"}):new URLSearchParams({status:TABS[tab][1]});if(project)q.set("project",project);if($("channel").value)q.set("channel",$("channel").value);
   items=await api("/items?"+q);renderList();
   const next=items.find(i=>i.id===keepId)||items[0];if(next)open(next.id);else{current=null;dirty=false;$("detail").replaceChildren(el("div",{class:"empty",text:"Nothing here."}))}}
