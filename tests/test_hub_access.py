@@ -121,3 +121,33 @@ def test_existing_database_gains_new_columns(tmp_path):
     hub = Hub(Store(path))
     token = hub.create_token("ben", "admin")
     assert hub.authenticate(token).role == "admin"
+
+
+def test_all_round_agent_does_every_agent_job_but_never_a_reviewers(hub):
+    from cmsbot.hub import due
+
+    token = hub.issue_token(ADMIN, "one-agent", "agent", "acme")["token"]
+    agent = hub.authenticate(token)
+    assert token.startswith("cms_age_") and agent.role == "agent"
+    item = hub.create_item(agent, "acme", kind="post", channel="x", title="P", body={"text": "hello"})   # drafts
+    hub.submit(agent, item["id"])
+    for forbidden in (lambda: hub.approve(agent, item["id"]), lambda: hub.update_item(agent, item["id"], body={"text": "sneak"}),
+                      lambda: hub.claim(agent, item["id"]), lambda: hub.set_brand(agent, "acme", {"tone": "x"}),
+                      lambda: hub.issue_token(agent, "more", "admin"), lambda: hub.set_setting(agent, "XAI_API_KEY", "k"),
+                      lambda: hub.decide_learning(agent, 1, "accepted")):
+        with pytest.raises(HubError) as denied:
+            forbidden()
+        assert denied.value.status in (403, 409)
+    assert hub.ready_to_post(agent) == []                          # sees drafts, but nothing is postable until approved
+    assert hub.list_items(agent, project="acme")[0]["id"] == item["id"]
+    hub.approve(ADMIN, item["id"])
+    assert hub.claim(agent, item["id"])["body"] == {"text": "hello"}   # posts
+    hub.mark_posted(agent, item["id"], post_url="https://x.com/1")
+    hub.report_metrics(agent, item["id"], {"impressions": 10})
+    hub.report_conversions(agent, "acme", [], source="ga4")           # analyses
+    hub.propose_learning(agent, "acme", "Try shorter hooks.")
+    listed = {t["who"] for t in due.whats_due(hub, agent, "acme")["for_you"]}
+    assert "reviewer" not in listed
+    other = hub.upsert_project(ADMIN, "other", "Other")
+    with pytest.raises(HubError):
+        hub.create_item(agent, other["slug"], kind="post", channel="x", title="t", body={"text": "x"})

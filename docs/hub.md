@@ -270,6 +270,20 @@ same page and sees only that project, and can hand out or withdraw access to it 
 Do the same for agents: a Grok Bot that posts for one project gets a distributor token for that
 project. Tokens are stored hashed, shown once, can expire, and show when they were last used.
 
+### Roles
+
+| Role | Can | Cannot |
+|---|---|---|
+| reviewer (a person) | everything, including approve, verify claims, settings, access | |
+| agent | everything the three roles below can | approve, verify claims, change settings or access |
+| generator | plan, draft, render, generate media, submit | approve; post; edit a piece once it is with the reviewer |
+| distributor | see approved copy that is due, claim it, record the post, report numbers and trends | see or edit drafts |
+| analyst | read everything, report results, propose learnings and skill changes | draft, post |
+
+Use **agent** when one agent does all the work. Use the narrow roles when different agents (or
+vendors) do different jobs: a distributor has never seen an unapproved draft, so it cannot post
+one by mistake. No agent role can approve.
+
 ## Where credentials live
 
 Each secret stays with the one party that uses it. The Hub and the repo hold none of the others.

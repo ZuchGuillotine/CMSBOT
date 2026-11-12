@@ -220,9 +220,9 @@ def options(hub: Hub, actor: Actor, item_id: int) -> dict[str, Any]:
 
 
 def _authorise(hub: Hub, actor: Actor, item: dict[str, Any], estimate: float) -> None:
-    if actor.role not in ("admin", "generator"):
+    if not actor.can("admin", "generator"):
         raise HubError("This token may not generate media.", 403)
-    if actor.role == "generator":
+    if actor.drafts:
         if item["status"] not in AGENT_EDITABLE:
             raise HubError(f"Item {item['id']} is '{item['status']}' and is with the reviewer.", 409)
         if item["kind"] == "short_video" and not item["audit"].get("script_approved"):

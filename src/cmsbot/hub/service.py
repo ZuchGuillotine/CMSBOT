@@ -29,7 +29,9 @@ from cmsbot.hub import checks, stats
 from cmsbot.hub.store import Store, now_iso, parse_iso
 from cmsbot.hub.vault import Vault
 
-ROLES = ("admin", "generator", "distributor", "analyst")
+ROLES = ("admin", "agent", "generator", "distributor", "analyst")
+# "agent" is one agent doing all the agent work: everything the three narrow roles can do, and nothing a reviewer can.
+AGENT_COVERS = ("generator", "distributor", "analyst")
 CHANNELS = ("blog", "email", "x", "threads", "instagram", "linkedin", "tiktok", "facebook", "reddit", "youtube")
 KINDS = ("blog", "newsletter", "thread", "post", "carousel", "short_video", "image", "infographic")
 STATUSES = (
@@ -82,7 +84,12 @@ class Actor:
     project: str | None = None  # None = every project
 
     def can(self, *roles: str) -> bool:
-        return self.role in roles
+        return self.role in roles or (self.role == "agent" and any(r in AGENT_COVERS for r in roles))
+
+    @property
+    def drafts(self) -> bool:
+        """True for agents that write. They are bound by the drafting limits: no edits once a piece is with the reviewer."""
+        return self.role in ("generator", "agent")
 
 
 def hash_token(token: str) -> str:
@@ -281,7 +288,7 @@ class Hub:
     # ---- guards -------------------------------------------------------------------------
 
     def _require(self, actor: Actor, *roles: str) -> None:
-        if actor.role not in roles:
+        if not actor.can(*roles):
             raise HubError(f"Role '{actor.role}' may not do this (needs {' or '.join(roles)}).", 403)
 
     def _scope(self, actor: Actor, project: str) -> None:
@@ -613,7 +620,7 @@ class Hub:
         if external_ref:
             existing = self.db.one("SELECT * FROM items WHERE project = ? AND external_ref = ?", (project, external_ref))
             if existing:  # idempotent re-push from the same source
-                if actor.role == "generator" and existing["status"] not in AGENT_EDITABLE:
+                if actor.drafts and existing["status"] not in AGENT_EDITABLE:
                     return self.get_item(actor, existing["id"])  # with the reviewer; leave it alone
                 return self.update_item(actor, existing["id"], title=title, body=body, media=media,
                                         attributes=attributes, link=link, gaps=gaps, audit=audit)
@@ -651,7 +658,7 @@ class Hub:
         editing approved copy withdraws the approval (use `approve` again, or `edit_and_approve`)."""
         self._require(actor, "admin", "generator")
         item = self._item(actor, item_id)
-        if actor.role == "generator" and item["status"] not in AGENT_EDITABLE:
+        if actor.drafts and item["status"] not in AGENT_EDITABLE:
             raise HubError(f"Item {item_id} is '{item['status']}' and is with the reviewer; agents can't change it now.", 409)
         if item["status"] in ("posting", "published"):
             raise HubError(f"Item {item_id} is {item['status']} and can no longer be edited.", 409)
@@ -671,7 +678,7 @@ class Hub:
         touches_copy = bool(values.keys() & {"title", "body", "media", "link"})
         if touches_copy and item["status"] in READY:
             values.update(status="in_review", approved_hash=None, approved_by=None, approved_at=None)
-        elif actor.role == "generator" and item["status"] in ("planned", "needs_revision", "failed") and touches_copy:
+        elif actor.drafts and item["status"] in ("planned", "needs_revision", "failed") and touches_copy:
             values["status"] = "drafting"
         values["updated_at"] = now_iso()
         self.db.update("items", "id", item_id, values)
@@ -693,7 +700,7 @@ class Hub:
         item = self._item(actor, item_id)
         if item["status"] in ("posting", "published"):
             raise HubError(f"Item {item_id} is {item['status']}.", 409)
-        if actor.role == "generator" and item["status"] in READY:
+        if actor.drafts and item["status"] in READY:
             raise HubError("Already approved; a reviewer must re-render.", 409)
         current = carousel.slides_hash(item["body"], carousel.resolve_style(item["body"], self.brand(item["project"]), style))
         if render_hash != current:
@@ -715,7 +722,7 @@ class Hub:
         item = self._item(actor, item_id)
         if item["status"] in ("posting", "published"):
             raise HubError(f"Item {item_id} is {item['status']}.", 409)
-        if actor.role == "generator" and item["status"] in READY:
+        if actor.drafts and item["status"] in READY:
             raise HubError("Already approved; a reviewer must re-render.", 409)
         if report.get("hash") != video.storyboard_hash(item["body"], self.video_assets(item)):
             raise HubError("The script or footage changed after this video was rendered; render again.", 409)
@@ -757,7 +764,7 @@ class Hub:
         if item["parent_id"]:
             raise HubError("Claims live on the anchor item, not on a derivative.")
         imported = item["status"] == "published" and bool(item["audit"].get("imported"))
-        if actor.role == "generator" and item["status"] not in AGENT_EDITABLE and not imported:
+        if actor.drafts and item["status"] not in AGENT_EDITABLE and not imported:
             raise HubError("Claims can't be replaced once the item is with the reviewer.", 409)
         keep = {c["text"]: c for c in self.db.all("SELECT * FROM claims WHERE item_id = ?", (item_id,))}
         self.db.execute("DELETE FROM claims WHERE item_id = ?", (item_id,))

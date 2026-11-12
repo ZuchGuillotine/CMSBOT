@@ -713,7 +713,7 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     @app.post("/api/items/{item_id}/media/raw")
     async def store_media(item_id: int, request: Request, name: str = Query(...), actor: Actor = Depends(who)):
         """Store a file for an item without attaching it (used for slide images, attached by PUT /render)."""
-        if actor.role not in ("admin", "generator"):
+        if not actor.can("admin", "generator"):
             raise HubError("This token may not upload.", 403)
         item = hub.get_item(actor, item_id)
         data = await request.body()

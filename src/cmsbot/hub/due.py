@@ -135,7 +135,8 @@ def whats_due(hub: Hub, actor: Actor, project: str) -> dict[str, Any]:
         add("decide", "reviewer", proposals + skill_proposals,
             f"{proposals} proposed learning(s) and {skill_proposals} proposed skill change(s) waiting for a decision.")
 
-    mine = {"generator": ("generator",), "distributor": ("distributor",), "analyst": ("analyst",), "admin": ("reviewer",)}[actor.role]
+    mine = {"generator": ("generator",), "distributor": ("distributor",), "analyst": ("analyst",), "admin": ("reviewer",),
+            "agent": ("generator", "distributor", "analyst")}[actor.role]
     return {
         "project": project, "checked_at": now_iso(), "rhythm": pace,
         "for_you": [t for t in tasks if t["who"] in mine], "for_others": [t for t in tasks if t["who"] not in mine],

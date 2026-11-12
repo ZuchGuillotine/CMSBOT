@@ -24,6 +24,11 @@ memory, and the Hub is how work passes between you.
 | generator | plan, draft, revise, render, generate media, submit for review | approve, post |
 | distributor | post approved copy exactly, record the post, report its numbers and trends | edit copy, post anything not handed to you |
 | analyst | bring in results, read the performance report, propose changes | change methods directly |
+| agent | all three of the above | approve, verify claims, change settings |
+
+With an `agent` token you do every agent job, so `whats_due` lists all of them. Keep the jobs apart
+all the same: post only what `claim_post` returns, never a draft from your own memory, even one you
+wrote and believe is fine. The copy a person approved may differ from what you submitted.
 
 Only a person approves. If a tool refuses you, the refusal says why; do not look for another way
 round it. Report it.
