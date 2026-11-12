@@ -38,6 +38,9 @@ cannot do what the note asks, `report_failure` with the reason.
 4. Write it. `save_draft(kind="blog", channel="blog", body={"markdown": ...}, gaps=[...])`.
 5. `set_claims(item_id, [{text, citation, citation_url}])`: every factual claim a derivative might
    repeat, one per entry. The reviewer verifies each once, here.
+   It returns each claim's label (`L1`, `L2`, ...). Use exactly those labels in a piece's
+   `body.claim_ids`; `get_item` on the anchor shows them again. A label that matches no claim is
+   flagged as a fix.
 6. `check_draft(item_id)`. Correct everything marked "fix" (length, banned words, invented
    experience, figures outside the claims) and save again. "note" items are measured patterns
    (a closing that restates the opening, announcing what the piece will do, contrast frames, generic

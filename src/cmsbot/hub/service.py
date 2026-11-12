@@ -548,6 +548,21 @@ class Hub:
             self.plan_series(actor, item_id, recipe)
         return self.get_item(actor, item_id)
 
+    def reread_import(self, actor: Actor, item_id: int, title: str, markdown: str) -> dict[str, Any]:
+        """Replace an imported anchor's text with a fresh reading of its page. Its claims and series are kept."""
+        self._require(actor, "admin", "generator")
+        item = self._item(actor, item_id)
+        if not item["audit"].get("imported"):
+            raise HubError("Only imported pieces can be read again from their page.")
+        if not markdown.strip():
+            raise HubError("The page had no readable text.")
+        self.db.update("items", "id", item_id, {"title": (title.strip() or item["title"])[:300], "body": {"markdown": markdown.strip()},
+                                                "updated_at": now_iso()})
+        updated = self._item(actor, item_id)
+        self._revision(actor, updated, "read again from the page")
+        self._event(actor, "reimported", item=updated, detail={"words": len(markdown.split())})
+        return self.get_item(actor, item_id)
+
     # ---- brief: everything a drafting agent needs before it writes -------------------------
 
     def brief(self, actor: Actor, project: str) -> dict[str, Any]:
@@ -557,11 +572,12 @@ class Hub:
         open_feedback = self.db.all(
             "SELECT id, kind, channel, title, review_notes FROM items WHERE project = ? AND status = 'needs_revision'",
             (project,))
+        pillars = self.db.all("SELECT key, name, description, weight FROM pillars WHERE project = ? AND status = 'active'", (project,))
         return {
             "project": {"slug": row["slug"], "name": row["name"]},
             "brand": row["brand"],
             "settings": row["settings"],
-            "pillars": self.db.all("SELECT key, name, description, weight FROM pillars WHERE project = ? AND status = 'active'", (project,)),
+            "pillars": pillars,
             "clusters": self.db.all(
                 "SELECT c.id, c.slug, c.name, c.theme, c.keywords, c.starts_on, c.ends_on, c.origin, c.status, p.key AS pillar "
                 "FROM clusters c LEFT JOIN pillars p ON p.id = c.pillar_id WHERE c.project = ? AND c.status != 'archived' "
@@ -570,6 +586,11 @@ class Hub:
             "signals": self.list_signals(actor, project, status="new"),
             "items_by_status": {r["status"]: r["n"] for r in counts},
             "needs_revision": open_feedback,
+            "warnings": [w for w in (
+                "" if (row["brand"].get("tone") or row["brand"].get("voice")) else
+                "No brand kit yet: there is no guidance on tone or words to avoid. Write plainly, and tell the owner the Brand tab is empty.",
+                "" if pillars else "No pillars are set for this project.",
+            ) if w],
             "to_write": self.db.all("SELECT id, kind, channel, title, parent_id, audit FROM items WHERE project = ? AND status = 'planned' "
                                     "ORDER BY id LIMIT 100", (project,)),
             "spend": self.spend(actor, project),
@@ -772,7 +793,7 @@ class Hub:
         return self.db.one("SELECT * FROM claims WHERE id = ?", (claim_id,)) or {}
 
     def writing_checks(self, item: dict[str, Any]) -> list[dict[str, str]]:
-        claims = self.db.all("SELECT * FROM claims WHERE item_id = ?", (item["parent_id"] or item["id"],))
+        claims = self.db.all("SELECT * FROM claims WHERE item_id = ? ORDER BY id", (item["parent_id"] or item["id"],))
         return checks.run(item, claims, self.brand(item["project"]), POST_LIMITS.get(item["channel"]))
 
     def blockers(self, item: dict[str, Any]) -> list[str]:
@@ -790,11 +811,12 @@ class Hub:
         elif state == "stale":
             out.append("The video is older than the script or footage; render it again.")
         anchor_id = item["parent_id"] or item["id"]
-        claims = self.db.all("SELECT * FROM claims WHERE item_id = ?", (anchor_id,))
-        cited = set(item["body"].get("claim_ids") or item["body"].get("claimIds") or []) if item["parent_id"] else None
+        claims = self.db.all("SELECT * FROM claims WHERE item_id = ? ORDER BY id", (anchor_id,))
+        refs = item["body"].get("claim_ids") or item["body"].get("claimIds") or []
+        cited = {c["id"] for c in (checks.resolve_claim(r, claims) for r in refs) if c} if item["parent_id"] else None
         settings = self._project(item["project"])["settings"]
-        for index, claim in enumerate(claims, start=1):
-            if cited is not None and not ({index, f"L{index}", claim["id"]} & cited):
+        for claim in claims:
+            if cited is not None and claim["id"] not in cited:
                 continue
             if claim["status"] == "rejected":
                 out.append(f"Claim marked wrong: {claim['text'][:90]}")
@@ -811,6 +833,11 @@ class Hub:
         item["content_hash"] = current
         item["changed_since_approval"] = bool(item["approved_hash"]) and item["approved_hash"] != current
         item["claims"] = self.db.all("SELECT * FROM claims WHERE item_id = ? ORDER BY id", (anchor_id,))
+        refs = item["body"].get("claim_ids") or item["body"].get("claimIds") or []
+        cited = {c["id"] for c in (checks.resolve_claim(r, item["claims"]) for r in refs) if c}
+        for position, claim in enumerate(item["claims"], start=1):
+            claim["label"] = f"L{position}"  # the reference a piece uses in claim_ids
+            claim["cited"] = claim["id"] in cited
         item["blockers"] = self.blockers(item)
         item["slides_stale"] = self.slides_stale(item)
         item["active_jobs"] = self.db.all("SELECT id, kind, created_at FROM jobs WHERE item_id = ? AND status = 'running'", (item_id,))

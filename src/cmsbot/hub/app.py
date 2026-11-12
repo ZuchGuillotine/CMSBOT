@@ -187,12 +187,16 @@ def build_mcp(hub: Hub, storage, do_import=None):
         claims; list them in body.claim_ids). attributes are the things you want compared later
         (hook, format, style, persona, length...). gaps are facts you could not confirm; never invent them."""
         if item_id:
-            return hub.update_item(actor(), item_id, title=title, body=body, media=media, attributes=attributes,
-                                   link=link or None, gaps=gaps, audit=audit, account=account or None)
-        return hub.create_item(actor(), project, kind=kind, channel=channel, title=title, body=body,
-                               cluster_id=cluster_id or None, parent_id=parent_id or None, account=account,
-                               media=media, attributes=attributes, link=link, gaps=gaps, audit=audit,
-                               external_ref=external_ref or None)
+            saved = hub.update_item(actor(), item_id, title=title, body=body, media=media, attributes=attributes,
+                                    link=link or None, gaps=gaps, audit=audit, account=account or None)
+        else:
+            saved = hub.create_item(actor(), project, kind=kind, channel=channel, title=title, body=body,
+                                    cluster_id=cluster_id or None, parent_id=parent_id or None, account=account,
+                                    media=media, attributes=attributes, link=link, gaps=gaps, audit=audit,
+                                    external_ref=external_ref or None)
+        # A short receipt, not the whole item: the draft's text is already in your context.
+        return {"id": saved["id"], "status": saved["status"], "kind": saved["kind"], "channel": saved["channel"],
+                "parent_id": saved["parent_id"], "blockers": saved["blockers"], "writing_checks": saved["writing_checks"]}
 
     @tool
     def render_carousel(item_id: int) -> dict[str, Any]:
@@ -240,8 +244,10 @@ def build_mcp(hub: Hub, storage, do_import=None):
 
     @tool
     def set_claims(item_id: int, claims: list[dict[str, Any]]) -> dict[str, Any]:
-        """Replace an anchor item's claim ledger: [{text, citation, citation_url}]. A person verifies each one."""
-        return hub.set_claims(actor(), item_id, claims)
+        """Replace an anchor item's claim ledger: [{text, citation, citation_url}]. A person verifies each one.
+        Returns each claim's label (L1, L2, ...): use exactly these labels in a derivative's body.claim_ids."""
+        item = hub.set_claims(actor(), item_id, claims)
+        return {"item_id": item["id"], "claims": [{"label": c["label"], "text": c["text"][:160], "status": c["status"]} for c in item["claims"]]}
 
     @tool
     def submit_for_review(item_id: int) -> dict[str, Any]:
@@ -559,6 +565,15 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
                 {"claim": "Second accent for contrast", "strength": 1, "note": "Used sparingly"}]},
             {"type": "cta", "headline": cta, "button": cta}]}
         return carousel.build_slides(sample, {"name": name, **draft})
+
+    @app.post("/api/items/{item_id}/reread")
+    def reread(item_id: int, actor: Actor = Depends(who)):
+        item = hub.get_item(actor, item_id)
+        try:
+            page = fetch.read_page(item["link"])
+        except fetch.FetchError as exc:
+            raise HubError(str(exc)) from exc
+        return hub.reread_import(actor, item_id, page["title"], page["markdown"])
 
     @app.put("/api/projects/{slug}/recipe")
     def put_recipe(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):

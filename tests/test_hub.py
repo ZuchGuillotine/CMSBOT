@@ -272,3 +272,16 @@ def test_writing_checks_flag_objective_problems(hub):
     assert any("Post 2 is" in b for b in hub.get_item(ADMIN, child["id"])["blockers"])  # over the limit blocks approval
     clean = draft(hub, parent_id=anchor["id"], body={"posts": ["A review pooled 3 trials."], "claim_ids": ["L1"]})
     assert [c for c in clean["writing_checks"] if c["level"] == "fix"] == []
+
+
+def test_check_notes_quote_what_they_found(hub):
+    text = ("In today's fast-paced world this is guaranteed to help. It's not about the dose, it's about the form. "
+            "QuickBooks costs $30 a month and Xero costs $15.")
+    item = draft(hub, kind="post", channel="linkedin", body={"text": text})
+    notes = {c["check"]: c["detail"] for c in item["writing_checks"]}
+    assert "\"in today's fast-paced world\"" in notes["stock phrases"]
+    assert "not about the dose" in notes["contrast frames"]
+    assert "guaranteed" in notes["absolute claims"]
+    assert not any("Shorten" in d or "concrete" in d for d in notes.values())  # nothing vague or unexplained
+    plain = draft(hub, title="plain", kind="post", channel="linkedin", body={"text": "QuickBooks costs $30 a month. Xero costs $15."})
+    assert plain["writing_checks"] == []

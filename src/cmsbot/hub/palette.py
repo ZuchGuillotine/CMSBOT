@@ -67,7 +67,7 @@ def from_image(data: bytes, count: int = 8) -> list[dict[str, Any]]:
         scale = max(small.width, small.height) / 140
         if scale > 1:  # nearest-neighbour keeps swatch colours pure instead of blending their edges
             small = small.resize((max(1, round(small.width / scale)), max(1, round(small.height / scale))), Image.Resampling.NEAREST)
-        pixels = list(small.getdata())
+        pixels = list(small.get_flattened_data()) if hasattr(small, "get_flattened_data") else list(small.getdata())
     bins: dict[tuple[int, int, int], list[int]] = {}
     for r, g, b in pixels:
         entry = bins.setdefault((r >> 4, g >> 4, b >> 4), [0, 0, 0, 0])

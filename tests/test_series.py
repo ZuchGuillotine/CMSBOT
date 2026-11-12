@@ -99,3 +99,48 @@ def test_page_text_extraction_and_address_checks():
     for bad in ("http://127.0.0.1/x", "http://169.254.169.254/latest/meta-data", "file:///etc/passwd", "http://10.0.0.5/"):
         with pytest.raises(fetch.FetchError):
             fetch.check_public(bad)
+
+
+def test_reader_keeps_tables_questions_and_loose_text():
+    page = ("<main><h1>Guide</h1><div class='lead'>Loose intro text.</div><h2>What you can automate</h2><div><table>"
+            "<tr><th>Task</th><th>Software</th></tr><tr><td>Recording</td><td>Bank feeds import daily</td></tr></table></div>"
+            "<h2>Questions</h2><details><summary>Can AI do my books?</summary><p>Most of the data entry.</p></details>"
+            "<ul><li>One</li><li>Two</li></ul><nav><p>skip me</p></nav></main>")
+    md = fetch.extract(page + "x" * 0)["markdown"]
+    assert "Loose intro text." in md
+    assert "| Task | Software |\n| --- | --- |\n| Recording | Bank feeds import daily |" in md
+    assert "**Can AI do my books?**\n\nMost of the data entry." in md
+    assert "- One\n- Two" in md and "skip me" not in md
+
+
+def test_claim_labels_are_confirmed_and_unknown_ones_flagged(hub):
+    hub.upsert_project(ADMIN, "acme", "Acme", settings={"require_verified_claims": True})
+    anchor = hub.import_published(ADMIN, "acme", url="https://acme.com/c", title="C", markdown=TEXT)
+    labelled = hub.set_claims(GEN, anchor["id"], [{"text": "First."}, {"text": "Second."}, {"text": "Third."}])["claims"]
+    assert [(c["label"], c["text"]) for c in labelled] == [("L1", "First."), ("L2", "Second."), ("L3", "Third.")]
+    piece = hub.create_item(GEN, "acme", kind="post", channel="linkedin", title="p", parent_id=anchor["id"],
+                            body={"text": "Second.", "claim_ids": ["L2", 3, "L9", "nonsense"]})
+    assert [c["label"] for c in piece["claims"] if c["cited"]] == ["L2", "L3"]
+    fix = next(c for c in piece["writing_checks"] if c["check"] == "claims")
+    assert fix["level"] == "fix" and "L9, nonsense" in fix["detail"] and "L1 to L3" in fix["detail"]
+    assert piece["blockers"] == ["Claim not verified: Second.", "Claim not verified: Third."]
+    hub.upsert_project(ADMIN, "acme", "Acme", settings={"require_verified_claims": False})  # switched off afterwards
+    assert hub.get_item(ADMIN, piece["id"])["blockers"] == []
+
+
+def test_reread_replaces_text_but_keeps_claims_and_series(hub):
+    anchor = hub.import_published(ADMIN, "acme", url="https://acme.com/d", title="D", markdown=TEXT)
+    hub.set_claims(GEN, anchor["id"], [{"text": "Kept."}])
+    hub.plan_series(ADMIN, anchor["id"], [{"kind": "thread", "channel": "x", "count": 2}])
+    again = hub.reread_import(ADMIN, anchor["id"], "D", TEXT + "\n\n| a | b |")
+    assert again["body"]["markdown"].endswith("| a | b |") and again["status"] == "published"
+    assert len(again["claims"]) == 1 and len(again["children"]) == 2
+    loose = hub.create_item(GEN, "acme", kind="post", channel="x", title="t", body={"text": "x"})
+    with pytest.raises(HubError):
+        hub.reread_import(ADMIN, loose["id"], "t", "text")
+
+
+def test_brief_warns_when_there_is_no_brand_kit(hub):
+    assert any("No brand kit" in w for w in hub.brief(GEN, "acme")["warnings"])
+    hub.set_brand(ADMIN, "acme", {"tone": "Plain."})
+    assert not any("No brand kit" in w for w in hub.brief(GEN, "acme")["warnings"])
