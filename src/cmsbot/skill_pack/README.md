@@ -1,5 +1,10 @@
 # CMSBOT skills
 
+These are the built-in skills. A running Hub installs them automatically and serves the current
+version to any connected agent (`list_skills`, `get_skill`), where reviewers can edit them, upload
+more, and accept or reject changes agents propose. `cmsbot hub skills pull` copies the Hub's versions
+into a local skills folder.
+
 Each folder is one skill: a `SKILL.md` with a name, a description of when to use it, and the method.
 They follow the open Agent Skills layout, so Claude Code, the Claude desktop app and other harnesses
 that read `SKILL.md` folders can load them. The dependable way to install them is to copy or link
@@ -29,6 +34,7 @@ or video model, a search API), it says so under "Needs" and reads the key from t
 
 | Skill | Use it to |
 |---|---|
+| `cmsbot-start` | Learn how to work with a Hub: roles, order of work, rules. Read first |
 | `cmsbot-onboard` | Set up a new project: brand kit, pillars, channels, budget |
 | `cmsbot-plan` | Plan the next period from pillars, trend signals and what has worked |
 | `cmsbot-write` | Draft an anchor piece and its per-channel derivatives, or revise after review |

@@ -97,7 +97,7 @@ details summary{cursor:pointer;color:var(--muted)}
 </main>
 </div>
 <script>
-const TABS=[["Needs review","in_review"],["Anchors","__anchors"],["Approved","approved,scheduled,posting"],["In progress","planned,drafting,needs_revision,failed"],["Posted","published"],["Rejected","rejected"],["Insights",""],["Brand",""],["Settings",""]];
+const TABS=[["Needs review","in_review"],["Anchors","__anchors"],["Approved","approved,scheduled,posting"],["In progress","planned,drafting,needs_revision,failed"],["Posted","published"],["Rejected","rejected"],["Insights",""],["Brand",""],["Skills",""],["Settings",""]];
 const HIDDEN_KEYS=new Set(["claim_ids","claimIds"]);
 let token=localStorage.getItem("cmsbot_token")||"", me=null, tab=0, items=[], current=null, draft=null, dirty=false;
 const $=id=>document.getElementById(id);
@@ -165,6 +165,40 @@ async function renderBrand(project){current=null;dirty=false;const d=$("detail")
     el("div",{class:"actions"},el("button",{class:"btn primary",text:"Save brand kit",onclick:async()=>{try{await api(`/projects/${project}/brand`,"PUT",{brand:collect(),name:F.name.value});dirty=false;toast("Brand kit saved");const keep=$("project").value;await start();$("project").value=keep;tab=TABS.findIndex(t=>t[0]==="Brand");renderTabs();renderBrand(keep)}catch(e){toast(e.message)}}}),el("span",{class:"count",text:"Applies to drafts and renders made from now on."}))];
   d.replaceChildren(...parts);fill(b,data.name);drawRoles();drawRefs();drawLogo();dirty=false;preview();
   $("list").replaceChildren(el("div",{class:"empty",text:"Voice, look and accounts for "+data.name+"."}))}
+function diffLines(a,b){const A=a.split("\n"),B=b.split("\n"),n=A.length,m=B.length;if(n*m>400000)return B.map(t=>({t,k:" "}));const L=Array.from({length:n+1},()=>new Uint16Array(m+1));
+  for(let i=n-1;i>=0;i--)for(let j=m-1;j>=0;j--)L[i][j]=A[i]===B[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);const out=[];let i=0,j=0;
+  while(i<n&&j<m){if(A[i]===B[j]){out.push({t:A[i],k:" "});i++;j++}else if(L[i+1][j]>=L[i][j+1]){out.push({t:A[i++],k:"-"})}else out.push({t:B[j++],k:"+"})}
+  while(i<n)out.push({t:A[i++],k:"-"});while(j<m)out.push({t:B[j++],k:"+"});return out}
+function diffView(a,b){const rows=diffLines(a,b);const changed=rows.map((r,i)=>r.k!==" "?i:-1).filter(i=>i>=0);const near=new Set();for(const i of changed)for(let k=i-2;k<=i+2;k++)near.add(k);
+  const box=el("pre",{style:"white-space:pre-wrap;font-size:12.5px;line-height:1.45;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--panel);max-height:420px;overflow:auto"});let gap=false;
+  rows.forEach((r,i)=>{if(!near.has(i)){if(!gap){box.append(el("div",{style:"color:var(--muted)",text:"  ⋯"}));gap=true}return}gap=false;const line=el("div",{text:(r.k==="+"?"+ ":r.k==="-"?"− ":"  ")+r.t});if(r.k==="+")line.style.background="var(--ok-bg)";if(r.k==="-"){line.style.background="var(--bad-bg)";line.style.textDecoration="line-through"}box.append(line)});
+  if(!changed.length)box.append(el("div",{text:"No differences."}));return box}
+async function renderSkills(project,openName){current=null;dirty=false;const d=$("detail"),scope=me.project||project||"";const q=scope?"?project="+scope:"";const list=await api("/skills"+q);
+  const show=async name=>{const info=await api(`/skills/${name}?manage=true${scope?"&project="+scope:""}`);const row=info.active||info.inherited;const inherited=!info.active&&!!info.inherited;
+    const desc=el("input",{type:"text"}),body=el("textarea",{rows:"22",style:"font-family:ui-monospace,monospace;font-size:13px"}),note=el("input",{type:"text",placeholder:"What changed and why (kept in the history)"});desc.value=row?row.description:"";body.value=row?row.body:"";
+    for(const n of [desc,body])n.addEventListener("input",()=>{dirty=true});
+    const act=async(path,method,payload,msg)=>{try{await api(path,method,payload);dirty=false;toast(msg);renderSkills(project,name)}catch(e){toast(e.message)}};
+    const parts=[el("div",{style:"display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"},el("span",{class:"chip",text:name}),row?el("span",{class:"chip ok",text:"version "+row.version}):null,el("span",{class:"chip",text:inherited?"hub-wide version (this project has no copy of its own)":scope?"this project's own version":"hub-wide"}),row?el("span",{class:"chip",text:row.source}):null)];
+    for(const p of info.proposals){parts.push(el("div",{class:"claim"},el("b",{text:`Proposed change from ${p.author} · ${local(p.created_at)}`}),el("p",{style:"margin:6px 0",text:p.note}),
+      ...p.caveats.map(c=>el("div",{class:"note warn",text:c})),Object.keys(p.evidence||{}).length?el("details",{},el("summary",{text:"Evidence"}),el("pre",{style:"white-space:pre-wrap;font-size:12px",text:JSON.stringify(p.evidence,null,1)})):null,
+      diffView(row?row.body:"",p.body),el("div",{class:"acts"},el("button",{class:"btn small primary",text:"Accept as the new version",onclick:()=>act(`/skills/versions/${p.id}/accept`,"POST",null,"Accepted")}),el("button",{class:"btn small",text:"Reject",onclick:()=>act(`/skills/versions/${p.id}/reject`,"POST",null,"Rejected")}))))}
+    parts.push(el("div",{class:"field"},el("label",{text:"When to use it (agents choose skills by this line)"}),desc),el("div",{class:"field"},el("label",{text:"Method"}),body),el("div",{class:"field"},el("label",{text:"Note for this change"}),note),
+      el("div",{class:"entry",style:"align-items:center"},el("button",{class:"btn primary",text:inherited?"Save as this project's own version":"Save as new version",onclick:()=>act(`/skills/${name}`,"PUT",{description:desc.value,body:body.value,project:scope,note:note.value},"Saved as a new version")}),
+        info.active?el("button",{class:"btn danger",text:scope?"Remove this project's version":"Retire skill",onclick:()=>{if(confirm(scope?"Go back to the hub-wide version for this project?":"Stop offering this skill to agents?"))act(`/skills/${name}${q}`,"DELETE",null,"Removed")}}):null,
+        el("span",{class:"count",text:"Drafts made from now on carry the new version's stamp, so results can be compared version against version."})));
+    if(info.history.length)parts.push(el("h2",{text:"History"}),el("table",{},...info.history.map(h=>el("tr",{},el("td",{text:"v"+h.version}),el("td",{},el("span",{class:"chip "+(h.status==="active"?"ok":""),text:h.status})),el("td",{text:h.author+" · "+local(h.created_at)}),el("td",{text:h.note}),
+      el("td",{},["superseded","rejected"].includes(h.status)?el("button",{class:"btn small",text:"Restore",onclick:()=>{if(confirm(`Make version ${h.version} current again?`))act(`/skills/versions/${h.id}/restore`,"POST",null,"Restored")}}):null)))));
+    d.replaceChildren(...parts);d.scrollTop=0;[...$("list").children].forEach(n=>n.setAttribute&&n.setAttribute("aria-current",String(n.dataset.name===name)))};
+  const upload=()=>{const text=el("textarea",{rows:"16",placeholder:"---\nname: my-skill\ndescription: When an agent should use this.\n---\n\n# Method\n…",style:"font-family:ui-monospace,monospace;font-size:13px"});const file=el("input",{type:"file",accept:".md,.markdown,.txt,text/markdown,text/plain"});
+    file.addEventListener("change",async()=>{if(file.files[0])text.value=await file.files[0].text()});
+    d.replaceChildren(el("h2",{text:"Upload a skill"}),el("p",{style:"color:var(--muted)",text:"A skill is one SKILL.md: a name and a one-line description at the top, then the method. Any agent connected to the Hub can then read and follow it"+(scope?" for this project.":" on every project. Pick a project first to add it to one project only.")}),
+      el("div",{class:"field"},el("label",{text:"Choose a SKILL.md file"}),file),el("div",{class:"field"},el("label",{text:"or paste it"}),text),
+      el("button",{class:"btn primary",text:"Add skill",onclick:async()=>{try{const r=await api("/skills","POST",{text:text.value,project:scope});toast("Skill added");renderSkills(project,r.name)}catch(e){toast(e.message)}}}),
+      el("p",{class:"count",style:"text-align:left;margin-top:10px",text:"A skill that needs helper scripts or other files is not supported yet; put what the agent needs in the text."}))};
+  $("list").replaceChildren(el("div",{style:"padding:10px 14px;border-bottom:1px solid var(--line)"},el("button",{class:"btn small",text:"Upload a skill",onclick:upload}),el("div",{class:"count",style:"text-align:left;margin-top:6px",text:scope?"Skills in effect for this project.":"Hub-wide skills. Pick a project to see or change its own versions."})),
+    ...list.map(sk=>{const r=el("div",{class:"row",onclick:()=>{if(leaveOk())show(sk.name).catch(e=>toast(e.message))}},el("div",{class:"t",text:sk.name}),el("div",{class:"m"},el("span",{class:"chip",text:"v"+sk.version}),el("span",{class:"chip",text:sk.scope==="hub"?"hub-wide":"project"}),sk.source==="builtin"?el("span",{class:"chip",text:"built-in"}):null,sk.proposals_waiting?el("span",{class:"chip warn",text:"change proposed"}):null),
+      el("div",{class:"count",style:"text-align:left;white-space:normal;margin-top:4px",text:sk.description}));r.dataset.name=sk.name;return r}));
+  const first=openName||(list.find(x=>x.proposals_waiting)||list[0]||{}).name;if(first)await show(first);else d.replaceChildren(el("div",{class:"empty",text:"No skills yet."}))}
 async function renderSettings(){current=null;dirty=false;$("list").replaceChildren(el("div",{class:"empty",text:"Access, provider keys and projects."}));const d=$("detail");
   const [tokens,projects]=await Promise.all([api("/tokens"),api("/projects")]);const scope=me.project||"";const parts=[el("div",{id:"fresh"})];
   const show=t=>{$("fresh").replaceChildren(tokenPanel(t));d.scrollTop=0};const again=()=>renderSettings().catch(e=>toast(e.message));
@@ -216,6 +250,7 @@ async function refresh(keepId){const project=$("project").value;localStorage.set
   if(TABS[tab][0]==="Insights")return renderInsights(project);
   if(TABS[tab][0]==="Settings")return renderSettings();
   if(TABS[tab][0]==="Brand")return renderBrand(project);
+  if(TABS[tab][0]==="Skills")return renderSkills(project);
   const q=TABS[tab][1]==="__anchors"?new URLSearchParams({anchors:"true"}):new URLSearchParams({status:TABS[tab][1]});if(project)q.set("project",project);if($("channel").value)q.set("channel",$("channel").value);
   items=await api("/items?"+q);renderList();
   const next=items.find(i=>i.id===keepId)||items[0];if(next)open(next.id);else{current=null;dirty=false;$("detail").replaceChildren(el("div",{class:"empty",text:"Nothing here."}))}}
@@ -323,8 +358,14 @@ async function drawSlides(it){const strip=$("slides"),state=$("slideState");if(!
     state.replaceChildren(el("div",{class:"note "+(p.up_to_date?"ok":"warn"),text:msg}))}
   catch(e){state.replaceChildren(el("div",{class:"note bad",text:e.message}))}}
 async function renderInsights(project){$("list").replaceChildren(el("div",{class:"empty",text:project?"Learnings, trends and performance for this project.":"Pick a project."}));const d=$("detail");current=null;if(!project){d.replaceChildren();return}
-  const [learn,signals,perf]=await Promise.all([api(`/projects/${project}/learnings`),api(`/projects/${project}/signals`),api(`/projects/${project}/performance`)]);
-  const parts=[el("h2",{text:"Proposed changes to how content is made"})];const proposed=learn.filter(l=>l.status==="proposed");
+  const [learn,signals,perf,dueNow]=await Promise.all([api(`/projects/${project}/learnings`),api(`/projects/${project}/signals`),api(`/projects/${project}/performance`),api(`/projects/${project}/due`)]);
+  const WHO={generator:"drafting agent",distributor:"posting agent",analyst:"analysis agent",reviewer:"you"};const all=[...dueNow.for_you,...dueNow.for_others];
+  const pe=el("input",{type:"text",style:"width:54px"}),ae=el("input",{type:"text",style:"width:54px"});pe.value=dueNow.rhythm.plan_every_days;ae.value=dueNow.rhythm.analyze_every_days;
+  const parts=[el("h2",{text:"What's due"}),all.length?el("table",{},el("tr",{},...["Task","Waiting on","How many","Detail"].map(h=>el("th",{text:h}))),...all.map(t=>el("tr",{},el("td",{},el("span",{class:"chip "+(t.overdue_days!=null?"bad":t.who==="reviewer"?"warn":""),text:t.task+(t.overdue_days!=null?" · overdue":"")})),el("td",{text:WHO[t.who]||t.who}),el("td",{text:String(t.count)}),el("td",{text:t.detail})))):el("div",{class:"note ok",text:"Nothing is due."}),
+    el("table",{style:"margin-top:8px"},el("tr",{},...["Last run","When","By","What it did"].map(h=>el("th",{text:h}))),...Object.entries(dueNow.last_runs).map(([task,r])=>el("tr",{},el("td",{text:task}),el("td",{text:r?`${local(r.at)} (${r.days_ago} days ago)`:"never recorded"}),el("td",{text:r?r.by:""}),el("td",{text:r?r.summary:""})))),
+    el("div",{class:"entry",style:"align-items:center;margin-top:8px"},el("span",{text:"Plan every"}),pe,el("span",{text:"days · analyse every"}),ae,el("span",{text:"days"}),el("button",{class:"btn small",text:"Save rhythm",onclick:async()=>{try{await api(`/projects/${project}/rhythm`,"PUT",{plan_every_days:pe.value,analyze_every_days:ae.value});toast("Saved");renderInsights(project)}catch(e){toast(e.message)}}}),
+      el("span",{class:"count",text:"Agents ask the Hub what is due at the start of each run. Numbers are due 24 hours, 72 hours and 7 days after each post."})),
+    el("h2",{text:"Proposed changes to how content is made"})];const proposed=learn.filter(l=>l.status==="proposed");
   if(!proposed.length)parts.push(el("div",{class:"empty",style:"padding:10px",text:"None waiting."}));
   for(const l of proposed){const decide=s=>api("/learnings/"+l.id,"PATCH",{status:s}).then(()=>renderInsights(project)).catch(e=>toast(e.message));
     parts.push(el("div",{class:"claim"},el("div",{text:l.statement}),el("details",{},el("summary",{text:"Evidence"}),el("pre",{style:"white-space:pre-wrap;font-size:12px",text:JSON.stringify(l.evidence,null,1)})),el("div",{class:"acts"},el("span",{class:"chip",text:"from "+l.proposed_by}),el("button",{class:"btn small primary",text:"Accept",onclick:()=>decide("accepted")}),el("button",{class:"btn small",text:"Reject",onclick:()=>decide("rejected")}))))}

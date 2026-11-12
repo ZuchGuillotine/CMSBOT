@@ -8,6 +8,7 @@ description: Pull content results into the CMSBOT Hub, attribute site traffic an
 Needs: the `cmsbot-hub` tools, plus whichever analytics connectors exist (GA4, Mixpanel, Search
 Console, Ahrefs, Google Trends). Use what is connected; say what was not available.
 
+0. **Check it is due.** `whats_due(project)`: run when `analyze` is listed for you, or the owner asked.
 1. **Attribute.** Every link the Hub hands out carries `utm_content=cmsbot-<item id>`. Query GA4 or
    Mixpanel for sessions, signups and revenue grouped by `utm_content` and day, and send the rows
    with `report_conversions(project, source, rows)`. For blog items, also pull organic clicks by
@@ -26,5 +27,14 @@ Console, Ahrefs, Google Trends). Use what is connected; say what was not availab
    (source `search`, `expires_in_days` 60+). For spikes, use Google Trends with a short expiry.
 6. **Money.** Report spend against budget and cost per signup by channel from the same report. If a
    channel has cost and no signups after a fair run, say so plainly.
-7. Write a five-line summary: what was measured, what is working, what is not, what you proposed,
+7. **Improve a method, rarely.** The performance report breaks results down by `skill` (the stamp of
+   the skill version that made each draft). If a version is "below baseline" on at least five posts,
+   or you can name a specific habit in the skill that the weaker posts share, draft a new version
+   and send it with `propose_skill_change(name, body, rationale, project, evidence)`. Change one
+   thing, for one project, and say what result would show it worked. Do not propose a change
+   because the newest posts look better or worse (they are not yet comparable), because of one
+   standout post, or while another change to that skill is still unmeasured: results could not be
+   attributed. The Hub attaches its own cautions to your proposal; a person decides.
+8. `log_run(project, "analyze", summary)`.
+9. Write a five-line summary: what was measured, what is working, what is not, what you proposed,
    what data was missing.

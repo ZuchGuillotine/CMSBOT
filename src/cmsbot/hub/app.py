@@ -33,7 +33,9 @@ from cmsbot.hub.service import (
 from cmsbot import carousel
 from cmsbot.hub import brand as brand_kit
 from cmsbot.hub import fetch, palette
+from cmsbot.hub import due
 from cmsbot.hub import generate as generation
+from cmsbot.hub import skills
 from cmsbot.hub import jobs
 from cmsbot.hub import render as rendering
 from cmsbot import video
@@ -93,7 +95,9 @@ def build_mcp(hub: Hub, storage, do_import=None):
         log_level="WARNING",
         instructions=(
             "CMSBOT Hub holds the content state for every project: plans, drafts, review status, approved copy, "
-            "posts, metrics, costs and learnings. Start with get_brief for the project. Drafting agents save drafts "
+            "posts, metrics, costs, learnings and the skills (written methods) agents follow. New here? Call "
+            "get_skill('cmsbot-start') first. Each session: whats_due(project), then get_skill for the task, then "
+            "get_brief for the project. Drafting agents save drafts "
             "and submit them; only a person approves. Posting agents call ready_to_post, claim_post, post exactly "
             "the returned copy, then mark_posted and later report_metrics. Never post anything that did not come "
             "from ready_to_post or claim_post."
@@ -115,6 +119,39 @@ def build_mcp(hub: Hub, storage, do_import=None):
                 raise ToolError(str(exc)) from exc
 
         return server.tool()(wrapped)
+
+    @tool
+    def whats_due(project: str) -> dict[str, Any]:
+        """What needs doing in this project right now, split into what is for your role and what is waiting on
+        others: revisions, pieces to write, posts due, numbers to report at 24h/72h/7d, planning or analysis that
+        is overdue, decisions waiting on the reviewer. Start every session here and do only what is due."""
+        return due.whats_due(hub, actor(), project)
+
+    @tool
+    def log_run(project: str, task: str, summary: str = "") -> dict[str, Any]:
+        """Record that you finished a run (task: plan, write, distribute or analyze) with one line on what it did.
+        Planning and analysis are scheduled from the last recorded run, so always log them."""
+        return due.log_run(hub, actor(), project, task, summary)
+
+    @tool
+    def list_skills(project: str = "") -> list[dict[str, Any]]:
+        """The skills (written methods) in effect, with a one-line description of when to use each. A project can
+        have its own version of a skill. Read the one for your task with get_skill before starting it."""
+        return skills.listing(hub, actor(), project or None)
+
+    @tool
+    def get_skill(name: str, project: str = "") -> dict[str, Any]:
+        """The current text of a skill for this project. Follow it, and set the returned stamp as the `skill`
+        attribute on drafts you make with it."""
+        return skills.get(hub, actor(), name, project or None)
+
+    @tool
+    def propose_skill_change(name: str, body: str, rationale: str, project: str = "", evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Propose a new version of a skill: the full new text, why, and the evidence (what you observed, on how
+        many posts, compared at the same age). Prefer changing one project's copy over the hub-wide one. Only when
+        the performance report shows 'above baseline' or 'below baseline' on at least five posts; a hunch or one
+        good post is not a reason. A person accepts or rejects it; one open proposal per skill."""
+        return skills.propose(hub, actor(), name=name, body=body, rationale=rationale, project=project or None, evidence=evidence)
 
     @tool
     def list_projects() -> list[dict[str, Any]]:
@@ -374,6 +411,7 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     app = FastAPI(title="CMSBOT Hub", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
     app.state.hub = hub
     jobs.recover(hub)
+    skills.seed(hub)
     setup_attempts = {"left": 10}
     code = hub.setup_code()
     if code:  # a fresh Hub: the first reviewer is created in the browser with this one-time code
@@ -518,6 +556,60 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     @app.put("/api/items/{item_id}/series")
     def put_series(item_id: int, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
         return hub.plan_series(actor, item_id, body.get("plan", []))
+
+    @app.get("/api/projects/{slug}/due")
+    def get_due(slug: str, actor: Actor = Depends(who)):
+        return due.whats_due(hub, actor, slug)
+
+    @app.put("/api/projects/{slug}/rhythm")
+    def put_rhythm(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return {"rhythm": due.set_rhythm(hub, actor, slug, body)}
+
+    @app.post("/api/projects/{slug}/runs")
+    def post_run(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return due.log_run(hub, actor, slug, str(body.get("task", "")), str(body.get("summary", "")))
+
+    @app.get("/api/skills")
+    def list_skills(project: str | None = None, actor: Actor = Depends(who)):
+        return skills.listing(hub, actor, project)
+
+    @app.get("/api/skills/{name}")
+    def get_skill(name: str, project: str | None = None, manage: bool = False, actor: Actor = Depends(who)):
+        return skills.detail(hub, actor, name, project) if manage else skills.get(hub, actor, name, project)
+
+    @app.put("/api/skills/{name}")
+    def put_skill(name: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return skills.save(hub, actor, name=name, description=str(body.get("description", "")), body=str(body.get("body", "")),
+                           project=body.get("project") or None, note=str(body.get("note", "")))
+
+    @app.post("/api/skills")
+    def upload_skill(body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        """Add a skill from the text of a SKILL.md file (front matter with name and description, then the method)."""
+        parsed = skills.parse(str(body.get("text", "")))
+        name = str(body.get("name") or parsed["name"]).strip().lower()
+        return skills.save(hub, actor, name=name, description=str(body.get("description") or parsed["description"]),
+                           body=parsed["body"], project=body.get("project") or None, note="Uploaded")
+
+    @app.delete("/api/skills/{name}")
+    def delete_skill(name: str, project: str | None = None, actor: Actor = Depends(who)):
+        skills.retire(hub, actor, name, project)
+        return {"name": name, "retired": True}
+
+    @app.post("/api/skills/versions/{skill_id}/{action}")
+    def skill_version_action(skill_id: int, action: str, actor: Actor = Depends(who)):
+        if action in ("accept", "reject"):
+            return skills.decide(hub, actor, skill_id, action == "accept")
+        if action == "restore":
+            return skills.restore(hub, actor, skill_id)
+        raise HubError(f"Unknown action '{action}'.", 404)
+
+    @app.get("/api/skills/versions/{skill_id}")
+    def skill_version(skill_id: int, actor: Actor = Depends(who)):
+        row = hub.db.one("SELECT * FROM skills WHERE id = ?", (skill_id,))
+        if not row:
+            raise HubError("No such version.", 404)
+        hub._manageable(actor, row["project"] or None)
+        return row
 
     @app.get("/api/projects/{slug}/brand")
     def get_brand(slug: str, actor: Actor = Depends(who)):

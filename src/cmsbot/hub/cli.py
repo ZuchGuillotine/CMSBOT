@@ -255,6 +255,27 @@ def hub_render(item_id: int, local: bool) -> None:
     click.echo(f"#{item_id}: {len(urls)} slides rendered here and attached.")
 
 
+@hub_group.group("skills")
+def skills_group() -> None:
+    """Copy the Hub's skills to this machine for harnesses that load skills from a folder."""
+
+
+@skills_group.command("pull")
+@click.option("--dir", "target", default="~/.claude/skills", show_default=True, type=click.Path(file_okay=False, path_type=Path))
+@click.option("--project", default=None, help="Use this project's versions where it has its own.")
+def skills_pull(target: Path, project: str | None) -> None:
+    """Write each skill in effect to <dir>/<name>/SKILL.md. Run again after skills change."""
+    remote = Remote()
+    target = target.expanduser()
+    for entry in remote.call("GET", "/skills", project=project):
+        skill = remote.call("GET", f"/skills/{entry['name']}", project=project)
+        folder = target / skill["name"]
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "SKILL.md").write_text(f"---\nname: {skill['name']}\ndescription: {skill['description']}\n---\n\n"
+                                         f"<!-- {skill['stamp']} from the CMSBOT Hub; edit it there, not here -->\n\n{skill['body']}\n", encoding="utf-8")
+        click.echo(f"{skill['stamp']} -> {folder / 'SKILL.md'}")
+
+
 @click.group("carousel")
 def carousel_group() -> None:
     """Render carousel slides from a slide spec and a project's brand kit."""

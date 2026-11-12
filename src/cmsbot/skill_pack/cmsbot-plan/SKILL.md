@@ -7,6 +7,7 @@ description: Plan the next week or month of content for a project from its pilla
 
 Needs: the `cmsbot-hub` tools.
 
+0. `whats_due(project)`. Plan only if `plan` is listed for you, or the owner asked.
 1. `get_brief(project)`. Read pillars, recent clusters, accepted learnings, open signals, spend.
    If `spend.over_budget` is true, stop and say so.
 2. Check the backlog first. If more than about two weeks of items are still in review, plan fewer
@@ -28,5 +29,6 @@ Needs: the `cmsbot-hub` tools.
    (pass `body={}` so it stays "planned", put the brief in `audit.brief`, and set `attributes`:
    `hook`, `format`, `style`, `persona`, `length`). Attributes are what analysis compares later, so
    use the same small vocabulary every time.
-6. Report the plan in a few lines: themes, counts per channel, expected cost, and anything you
+6. `log_run(project, "plan", summary)`: the next planning run is scheduled from this.
+7. Report the plan in a few lines: themes, counts per channel, expected cost, and anything you
    skipped and why.

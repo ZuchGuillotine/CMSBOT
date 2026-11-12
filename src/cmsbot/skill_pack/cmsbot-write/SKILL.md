@@ -10,7 +10,7 @@ headless pipeline, `cmsbot generate --method multipass` and `cmsbot derive`, rem
 API runs; send its output with `cmsbot hub push`.)
 
 ## What to write
-`get_brief(project)` lists `needs_revision` (do these first) and `to_write`: pieces a person has
+Start with `whats_due(project)`: `revise` and `write` are yours. `get_brief(project)` lists `needs_revision` (do these first) and `to_write`: pieces a person has
 planned, each with a kind, a channel, the anchor it comes from (`parent_id`) and a one-line brief in
 `audit.brief`. Write exactly those. Do not add pieces nobody planned; if the owner asks for more or
 fewer from an anchor, change the plan with `plan_series(anchor_id, [{kind, channel, count}])` and
@@ -73,4 +73,5 @@ into images in the project's brand style. Never ask an image model to draw the w
 files (video, photos) with `cmsbot hub upload <item_id> <file>`.
 
 Put `{{link}}` where the anchor's URL belongs; the Hub adds tracking tags when it is posted.
-Set `attributes` from the plan. After each paid tool call, `record_cost`.
+Set `attributes` from the plan, and set `skill` to the stamp `get_skill` gave you (for example
+`cmsbot-write@3`). When the run is finished, `log_run(project, "write", summary)`.

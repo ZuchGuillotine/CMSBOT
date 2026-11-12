@@ -35,4 +35,4 @@ cmsbot = "cmsbot.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-cmsbot = ["templates/*.html", "styles/*.md", "hub/*.html", "carousel/styles/*.css"]
+cmsbot = ["templates/*.html", "styles/*.md", "hub/*.html", "carousel/styles/*.css", "skill_pack/*.md", "skill_pack/*/SKILL.md"]

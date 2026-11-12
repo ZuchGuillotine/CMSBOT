@@ -108,5 +108,6 @@ All providers implement `LLMProvider.generate()` → `LLMResponse` (normalized c
   `tests/test_hub.py`, not in a route.
 - Agents must never be able to approve or post unapproved copy. Keep the role checks when changing
   `service.py`.
-- `skills/` holds the methods (plan, write, short video, distribute, analyze, onboard). A new
-  capability is a new skill folder, not a new pipeline stage.
+- `src/cmsbot/skill_pack/` holds the built-in skills (`skills/` at the repo root is a link to it).
+  A running Hub seeds them and serves them to agents; a new capability is a new skill, not a new
+  pipeline stage.

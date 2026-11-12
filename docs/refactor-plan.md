@@ -108,6 +108,12 @@ Done in step 8:
 - Brand tab: voice, look and accounts per project, colours read from uploaded pictures or the
   site's styles, live slide preview, and agent-drafted kits that a reviewer accepts.
 
+Done in step 9:
+- Skills in the Hub: built-ins seeded and served to agents, a start-here skill, upload and edit,
+  per-project versions, history and restore, and agent-proposed changes with evidence cautions.
+- Rhythm and what's due: one call that tells each role what to do now, run logging, snapshot
+  reminders at 24h/72h/7d, and the same list on the Insights tab.
+
 Not done yet, in order:
 
 1. **Stand it up.** Host the Hub, create tokens, connect Claude and Grok Bot. Verify Grok Bot's

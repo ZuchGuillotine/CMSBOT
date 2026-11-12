@@ -15,6 +15,8 @@ token. You can see approved content only.
 - Apply the `disclosure` field when it is not empty (for example a "your brand" toggle).
 
 ## Each run
+0. `whats_due(project)`: `post` and `metrics` are yours. The `metrics` entry lists each post that
+   has reached 24 hours, 72 hours or 7 days without its numbers, with its link.
 1. `ready_to_post(project, channel)` for each channel you post to. Items with a `scheduled_at`
    in the future are not due; post them at that time, not before.
 2. For each due item: `claim_post(item_id)`, post it through the channel's API or plugin, then
@@ -27,3 +29,4 @@ token. You can see approved content only.
    summary, channel, evidence, score)`. Say what is rising, where, and link the evidence. Do not
    write content for it yourself; planning decides whether it fits the brand's pillars.
 5. If you paid for anything (API credits, boosts), `record_cost`.
+6. `log_run(project, "distribute", summary)`.

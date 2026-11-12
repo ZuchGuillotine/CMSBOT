@@ -85,6 +85,50 @@ Optional environment variables: `CMSBOT_HUB_SECRET_KEY` (supply the encryption k
 of the generated file, for example from a secret manager), the `CMSBOT_MEDIA_*` bucket settings
 below, and provider keys by name as a fallback when nothing is saved in Settings.
 
+## Skills
+
+A skill is a written method an agent follows (plan a period, write a piece, post, analyse). The Hub
+holds them so every connected agent gets the same current version, whatever harness it runs in.
+
+- **Built in:** `cmsbot-start` (read first by any new agent), `cmsbot-onboard`, `cmsbot-plan`,
+  `cmsbot-write`, `cmsbot-short-video`, `cmsbot-distribute`, `cmsbot-analyze`. They are installed
+  automatically and refreshed on upgrade unless you have edited the Hub's copy.
+- **Agents:** `list_skills`, then `get_skill(name, project)`. The connection's own instructions tell a
+  new agent to read `cmsbot-start`. Each skill comes with a stamp such as `cmsbot-write@3`, which
+  agents set on the drafts they make with it.
+- **Skills tab:** read and edit any skill, upload a new one (a `SKILL.md`: name and one-line
+  description, then the method), see every version, and restore an earlier one. With a project
+  selected you edit that project's own version, which wins there; other projects keep the hub-wide one.
+- **Local copy:** `cmsbot hub skills pull` writes the Hub's versions into a skills folder for
+  harnesses that load skills from disk.
+
+### Improving a skill from results
+The performance report breaks results down by skill stamp, with the same guards as everything else
+(same age, per-channel baseline, small samples discounted). An agent can propose a new version with
+`propose_skill_change`; it appears on the Skills tab as a line-by-line difference with the agent's
+reason and evidence, plus the Hub's own cautions: no measured posts for the current version, too few
+to judge, no clear difference from typical, or a change that would affect every project. One
+proposal per skill at a time, so a result can be attributed to one change. A person accepts or
+rejects; nothing an agent proposes takes effect on its own.
+
+## Rhythm and what's due
+
+Agents do not keep their own calendar. At the start of a run they call `whats_due(project)` and do
+what is listed for their role; at the end of a planning or analysis run they call `log_run`. A run
+that was missed is simply still due next time.
+
+| Due item | For | When |
+|---|---|---|
+| revise, write | drafting agent | pieces sent back, failed, or planned |
+| review, decide | reviewer | drafts waiting; proposed learnings or skill changes |
+| post | posting agent | approved and due now |
+| metrics | posting agent | a post reached 24 hours, 72 hours or 7 days without its numbers |
+| plan, analyze | drafting / analysis agent | the last recorded run is older than the project's rhythm |
+
+The Insights tab shows the same list with who it is waiting on, when each kind of run last happened
+and what it did, and the rhythm (plan every N days, analyse every N days) per project. Scheduling
+itself stays in the agent's harness: schedule each agent to wake daily and ask what is due.
+
 ## Brand kit
 
 Each project has a brand kit on the **Brand** tab. Everything that writes or designs for the project
