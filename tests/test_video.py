@@ -113,16 +113,23 @@ def test_render_end_to_end(tmp_path):
     assets = tmp_path / "assets"
     assets.mkdir()
     quiet = ["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi"]
-    subprocess.run([*quiet, "-i", "testsrc2=s=640x360:r=30", "-t", "2", "-pix_fmt", "yuv420p", str(assets / "shot-02.mp4")], check=True)
+    # generated clips arrive at 24 fps and tagged bt709; stills and cards carry no colour tags
+    subprocess.run([*quiet, "-i", "testsrc2=s=400x736:r=24", "-t", "2", "-pix_fmt", "yuv420p", "-colorspace", "bt709", "-color_primaries", "bt709",
+                    "-color_trc", "bt709", "-color_range", "tv", str(assets / "shot-02.mp4")], check=True)
     subprocess.run([*quiet, "-i", "color=c=0x334466:s=800x600", "-frames:v", "1", str(assets / "shot-03.png")], check=True)
     subprocess.run([*quiet, "-i", "sine=frequency=220:duration=8", "-c:a", "aac", str(assets / "voiceover.m4a")], check=True)
     found = video.find_assets(assets)
     assert set(found) == {"shot-02", "shot-03", "voiceover"}
     report = video.render(BODY, {"name": "Acme"}, tmp_path / "out", assets=found)
-    assert report["file"] == {"width": 1080, "height": 1920, "has_audio": True, "seconds": pytest.approx(8, abs=0.2)}
+    assert report["file"] == {"width": 1080, "height": 1920, "has_audio": True, "seconds": pytest.approx(8, abs=0.2),
+                              "picture_seconds": pytest.approx(8, abs=0.2)}
     assert report["video"].stat().st_size > 10_000 and report["contact_sheet"].exists()
     checks = {c["check"]: c for c in report["checks"]}
-    assert checks["every word captioned"]["ok"] and checks["size"]["ok"]
+    assert checks["every word captioned"]["ok"] and checks["size"]["ok"] and checks["picture"]["ok"]
+    # the picture must run as long as the sound: count frames, since the file's length is the sound's
+    frames = subprocess.run(["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames",
+                             "-of", "csv=p=0", str(report["video"])], capture_output=True, text=True, check=True).stdout.strip()
+    assert int(frames) == pytest.approx(8 * video.FPS, abs=6)
     assert not checks["footage"]["ok"] and "1, 4" in checks["footage"]["detail"]
     saved = json.loads((tmp_path / "out" / "render.json").read_text())
     assert saved["hash"] == video.storyboard_hash(BODY)
@@ -136,3 +143,18 @@ def test_render_end_to_end(tmp_path):
         with Image.open(frame) as image:
             band = image.convert("L").crop((84, 1080, 910, 1310))
             assert band.getextrema()[1] > 200, f"no caption visible at {middle:.1f}s"
+
+
+def test_a_picture_that_ends_before_the_sound_fails_its_check():
+    timing = video.plan_timing(video.normalize(BODY))
+    captions = video.caption_chunks(timing["shots"])
+    whole = {"width": 1080, "height": 1920, "has_audio": True, "seconds": timing["seconds"], "picture_seconds": timing["seconds"]}
+    cut = {**whole, "picture_seconds": round(timing["seconds"] * 0.4, 2)}
+    picture = lambda file: next(c for c in video.check(timing, captions, {}, file) if c["check"] == "picture")
+    assert picture(whole)["ok"]
+    assert not picture(cut)["ok"] and "of picture" in picture(cut)["detail"]
+
+
+def test_every_segment_is_encoded_with_the_same_colour_tags():
+    tags = dict(zip(video._ENCODE[::2], video._ENCODE[1::2]))
+    assert (tags["-colorspace"], tags["-color_primaries"], tags["-color_trc"], tags["-color_range"]) == ("bt709", "bt709", "bt709", "tv")

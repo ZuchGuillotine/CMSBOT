@@ -118,6 +118,16 @@ Done in step 10:
 - An all-round `agent` role, and each connected agent is told its scope (`whoami`, role-filtered
   tool list).
 
+Done in step 11 (2026-11-14, from the first live posting queue and video):
+- Posting times per project and channel (`hub/cadence.py`, Settings tab). Approval takes the next free
+  time; a one-press schedule for what was approved before. `whats_due` shows the cadence to every role.
+- Tracking tags are added once at hand-over (they were added twice wherever copy used `{{link}}`), a
+  piece with no link of its own points at its anchor, and `{{link}}` with nothing to fill it blocks approval.
+- Video: every segment is encoded with the same colour tags, and a new `picture` check compares the
+  picture's length with the sound's. A live render mixing generated clips with stills came out with
+  25 s of sound and 10 s of picture while every check passed. Not reproduced off the Hub (ffmpeg 6.1
+  and a current build both render it whole), so confirm with a live render after deploying.
+
 ## Where things stand (2026-11-12)
 
 **Live:** the Hub runs at its own address on one small AWS Lightsail instance (about $13 a month for

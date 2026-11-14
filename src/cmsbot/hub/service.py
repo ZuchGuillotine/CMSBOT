@@ -121,6 +121,18 @@ def tracked_link(link: str, *, channel: str, campaign: str, item_id: int) -> str
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
+LINK_TOKEN = "{{link}}"
+
+
+def apply_tracking(text: str, link: str, tracked: str) -> str:
+    """Puts the tracked link where the copy has {{link}} or the bare link. One pass over the text, so
+    the tags are added once: the tracked link starts with the bare one and must not be matched again."""
+    targets = [re.escape(LINK_TOKEN)]
+    if link and tracked:  # the bare link, but not where it is only the start of a longer address
+        targets.append(re.escape(link) + r"(?![\w/?&=%#~+@-]|\.\w)")
+    return re.sub("|".join(targets), lambda _: tracked, text)
+
+
 class Hub:
     def __init__(self, store: Store, public_url: str = ""):
         self.db = store
@@ -808,6 +820,8 @@ class Hub:
         if content_hash(item) is None:
             out.append("Nothing to post yet.")
         out += [f"Open gap: {gap}" for gap in item["gaps"]]
+        if LINK_TOKEN in json.dumps(item["body"]) and not self._link(item):
+            out.append("The copy has {{link}} but neither this item nor its anchor has a link; it would be posted blank.")
         out += [c["detail"] for c in self.writing_checks(item) if c["check"] == "length"]
         if self.slides_stale(item):
             out.append("Slide images are missing or older than the slide text; render them again.")
@@ -859,9 +873,17 @@ class Hub:
         item["char_limit"] = POST_LIMITS.get(item["channel"])
         return item
 
+    def _link(self, item: dict[str, Any]) -> str:
+        """Where the piece points. One written from an anchor points at the anchor unless it has a link of its own."""
+        if item["link"] or not item["parent_id"]:
+            return item["link"] or ""
+        anchor = self.db.one("SELECT link FROM items WHERE id = ?", (item["parent_id"],)) or {}
+        posted = self.db.one("SELECT post_url FROM publications WHERE item_id = ? ORDER BY id DESC LIMIT 1", (item["parent_id"],)) or {}
+        return anchor.get("link") or posted.get("post_url") or ""
+
     def _tracked(self, item: dict[str, Any]) -> str:
         cluster = self.db.one("SELECT slug FROM clusters WHERE id = ?", (item["cluster_id"],)) if item["cluster_id"] else None
-        return tracked_link(item["link"], channel=item["channel"], campaign=(cluster or {}).get("slug", ""), item_id=item["id"])
+        return tracked_link(self._link(item), channel=item["channel"], campaign=(cluster or {}).get("slug", ""), item_id=item["id"])
 
     def list_items(self, actor: Actor, *, project: str | None = None, status: str | None = None,
                    channel: str | None = None, kind: str | None = None, limit: int = 200,
@@ -917,7 +939,14 @@ class Hub:
         blockers = self.blockers(item)
         if blockers:
             raise HubError("Can't approve yet: " + "; ".join(blockers), 409)
-        when = parse_iso(scheduled_at).strftime("%Y-%m-%dT%H:%M:%SZ") if scheduled_at else item["scheduled_at"]
+        if scheduled_at:  # the reviewer chose a time; a time in the past means "post now"
+            when = parse_iso(scheduled_at).strftime("%Y-%m-%dT%H:%M:%SZ")
+        else:
+            from cmsbot.hub import cadence  # noqa: I001 (imported here: cadence builds on this module)
+
+            when = item["scheduled_at"]
+            if not when or parse_iso(when) <= datetime.now(timezone.utc):
+                when = cadence.next_slot(self, item["project"], item["channel"]) or when
         self.db.update("items", "id", item_id, {
             "status": "scheduled" if when else "approved", "scheduled_at": when, "approved_hash": content_hash(item),
             "approved_by": actor.name, "approved_at": now_iso(), "review_notes": "", "updated_at": now_iso(),
@@ -959,12 +988,11 @@ class Hub:
 
     def _ready_payload(self, item: dict[str, Any]) -> dict[str, Any]:
         brand = self._project(item["project"])["brand"]
-        tracked = self._tracked(item)
+        link, tracked = self._link(item), self._tracked(item)
 
         def with_tracking(value: Any) -> Any:  # links written into the copy get the same tags
             if isinstance(value, str):
-                value = value.replace("{{link}}", tracked)
-                return value.replace(item["link"], tracked) if item["link"] else value
+                return apply_tracking(value, link, tracked)
             if isinstance(value, list):
                 return [with_tracking(v) for v in value]
             if isinstance(value, dict):

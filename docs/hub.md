@@ -122,12 +122,42 @@ that was missed is simply still due next time.
 | revise, write | drafting agent | pieces sent back, failed, or planned |
 | review, decide | reviewer | drafts waiting; proposed learnings or skill changes |
 | post | posting agent | approved and due now |
+| cadence | reviewer | several approved posts have no time and no posting times are set |
 | metrics | posting agent | a post reached 24 hours, 72 hours or 7 days without its numbers |
 | plan, analyze | drafting / analysis agent | the last recorded run is older than the project's rhythm |
 
 The Insights tab shows the same list with who it is waiting on, when each kind of run last happened
 and what it did, and the rhythm (plan every N days, analyse every N days) per project. Scheduling
 itself stays in the agent's harness: schedule each agent to wake daily and ask what is due.
+
+## Posting times
+
+Without posting times, every approved item is due at once and the posting agent has nothing to pace
+itself by. Set them per project and channel under **Settings → Posting times**: a time zone, the times
+of day each channel posts (24-hour clock), the most posts a day, and optionally the weekdays.
+
+```json
+{"timezone": "America/Los_Angeles",
+ "channels": {"x": {"times": ["09:00", "13:00", "17:30"], "per_day": 2},
+              "linkedin": {"times": ["08:30"], "days": ["mon", "wed", "fri"]}}}
+```
+
+- Approving an item without a time gives it the channel's next free time. A day is full once it holds
+  `per_day` posts, counting what is queued and what was already posted that day.
+- A time the reviewer picks at approval always wins. A time in the past means "post now".
+- A channel with no times keeps the old behaviour: approved means due now.
+- **Save and schedule approved posts** gives a time to everything approved before the times were set,
+  oldest first, taking turns between anchors so one guide does not fill a week. Approval is untouched.
+- `ready_to_post` already returns items in time order and holds back anything not yet due.
+  `whats_due` shows every role the cadence and how much is queued per channel. Only a person changes it:
+  `PUT /api/projects/{slug}/cadence`, `POST /api/projects/{slug}/cadence/backlog`.
+
+## Links and tracking
+
+`{{link}}` in the copy, and the item's bare link, are replaced by the tracked link (UTM tags with
+`utm_content=cmsbot-<id>`) when a post is handed over, once each. A piece written from an anchor that
+has no link of its own points at the anchor. Copy that contains `{{link}}` with no link to put there
+cannot be approved.
 
 ## Brand kit
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from cmsbot.hub import cadence
 from cmsbot.hub.service import Actor, Hub, HubError
 from cmsbot.hub.store import now_iso, parse_iso
 
@@ -104,6 +105,10 @@ def whats_due(hub: Hub, actor: Actor, project: str) -> dict[str, Any]:
     ready = hub.ready_to_post(Actor("due", "admin"), project=project, due_within_hours=0)
     if ready:
         add("post", "distributor", len(ready), "Approved and due now.", items=[r["id"] for r in ready])
+    unscheduled = (hub.db.one("SELECT COUNT(*) AS n FROM items WHERE project = ? AND status = 'approved' AND scheduled_at IS NULL", (project,)) or {}).get("n", 0)
+    if unscheduled > 3 and not (cadence.get(hub, project).get("channels")):
+        add("cadence", "reviewer", unscheduled, f"{unscheduled} approved posts have no time and are all due at once. "
+            "Set posting times per channel under Settings, then schedule the backlog.")
 
     snapshots = snapshots_due(hub, project, now)
     if snapshots:
@@ -138,7 +143,7 @@ def whats_due(hub: Hub, actor: Actor, project: str) -> dict[str, Any]:
     mine = {"generator": ("generator",), "distributor": ("distributor",), "analyst": ("analyst",), "admin": ("reviewer",),
             "agent": ("generator", "distributor", "analyst")}[actor.role]
     return {
-        "project": project, "checked_at": now_iso(), "rhythm": pace,
+        "project": project, "checked_at": now_iso(), "rhythm": pace, "cadence": cadence.outlook(hub, project),
         "for_you": [t for t in tasks if t["who"] in mine], "for_others": [t for t in tasks if t["who"] not in mine],
         "last_runs": {task: ({"at": run["at"], "by": run["actor"], "days_ago": _days_since(run["at"], now), "summary": run["detail"].get("summary", "")}
                              if (run := _last_run(hub, project, task)) else None) for task in RUN_TASKS},

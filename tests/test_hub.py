@@ -182,6 +182,41 @@ def test_learnings_need_a_person_to_take_effect(hub):
     assert hub.brief(GEN, "micros")["learnings"][0]["statement"].startswith("Lead threads")
 
 
+def test_tracking_tags_are_added_once_wherever_the_link_appears(hub):
+    link = "https://example.com/guide/"
+    item = draft(hub, link=link, body={"posts": ["Read it: {{link}}", f"Or here: {link}.", f"A section: {link}#faq and {link}more"]})
+    hub.submit(GEN, item["id"])
+    hub.approve(ADMIN, item["id"])
+    payload = hub.ready_to_post(DIST)[0]
+    tracked = payload["link"]
+    assert tracked.count("utm_source=") == 1 and tracked.startswith(link + "?")
+    first, second, third = payload["body"]["posts"]
+    assert first == f"Read it: {tracked}" and second == f"Or here: {tracked}."
+    assert third == f"A section: {link}#faq and {link}more"  # a different address that only starts the same way
+    assert hub.claim(DIST, item["id"])["body"] == payload["body"]
+
+
+def test_a_piece_without_its_own_link_points_at_its_anchor(hub):
+    anchor = hub.import_published(ADMIN, "micros", url="https://example.com/guide/", title="Guide", markdown="# Guide\n\n" + "Words here. " * 30)
+    piece = hub.create_item(GEN, "micros", kind="post", channel="linkedin", title="p", parent_id=anchor["id"], body={"text": "More: {{link}}"})
+    assert piece["link"] == "" and piece["blockers"] == []
+    assert piece["tracked_link"].startswith("https://example.com/guide/?utm_source=linkedin")
+    hub.submit(GEN, piece["id"])
+    hub.approve(ADMIN, piece["id"])
+    payload = hub.ready_to_post(DIST, channel="linkedin")[0]
+    assert payload["body"]["text"] == "More: " + payload["link"] and "cmsbot-%d" % piece["id"] in payload["link"]
+
+
+def test_copy_that_asks_for_a_link_nobody_gave_cannot_be_approved(hub):
+    item = draft(hub, body={"posts": ["Read it: {{link}}"]})
+    hub.submit(GEN, item["id"])
+    with pytest.raises(HubError) as blocked:
+        hub.approve(ADMIN, item["id"])
+    assert "{{link}}" in str(blocked.value)
+    hub.update_item(ADMIN, item["id"], link="https://example.com/a")
+    assert hub.approve(ADMIN, item["id"])["status"] == "approved"
+
+
 def test_tracked_link_replaces_existing_utm():
     link = tracked_link("https://a.com/p?utm_source=old&k=1#top", channel="x", campaign="sleep", item_id=7)
     assert link == "https://a.com/p?k=1&utm_source=x&utm_medium=social&utm_campaign=sleep&utm_content=cmsbot-7#top"
