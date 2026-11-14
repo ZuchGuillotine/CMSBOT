@@ -34,3 +34,8 @@ contexts/*.local.md
 .DS_Store
 Thumbs.db
 hub-data/
+
+# Hub data must never be committed: the key decrypts stored provider keys
+secret.key
+hub-data/
+*.sqlite3
