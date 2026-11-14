@@ -294,13 +294,18 @@ def probe_seconds(path: Path) -> float:
 
 
 def probe_video(path: Path) -> dict[str, Any]:
-    result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height", "-show_entries",
+    result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height,duration", "-show_entries",
                              "format=duration", "-of", "json", str(path)], capture_output=True, text=True)
     data = json.loads(result.stdout or "{}")
     video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), {})
+    try:
+        picture = round(float(video.get("duration") or 0), 2)
+    except (TypeError, ValueError):
+        picture = 0.0
     return {"width": video.get("width"), "height": video.get("height"),
             "has_audio": any(s.get("codec_type") == "audio" for s in data.get("streams", [])),
-            "seconds": round(float((data.get("format") or {}).get("duration") or 0), 2)}
+            "seconds": round(float((data.get("format") or {}).get("duration") or 0), 2),
+            "picture_seconds": picture}  # the file's length is the sound's; a picture can end early
 
 
 def find_assets(folder: Path) -> dict[str, Path]:
@@ -317,7 +322,11 @@ def find_assets(folder: Path) -> dict[str, Path]:
     return found
 
 
-_ENCODE = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", str(FPS), "-an"]
+# Every segment carries the same colour tags. Generated clips arrive tagged bt709 and stills arrive untagged;
+# left alone, the joined file changes colour properties part-way and the final pass can stop drawing the
+# picture at that point while the sound runs on.
+_COLOUR = ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709", "-color_range", "tv"]
+_ENCODE = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", *_COLOUR, "-r", str(FPS), "-an"]
 _FIT = f"scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=increase,crop={WIDTH}:{HEIGHT},setsar=1"
 
 
@@ -382,7 +391,7 @@ def render(body: dict[str, Any], brand: dict[str, Any] | None, out_dir: Path, *,
     _run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(silent)], "joining shots")
 
     total = f"{timing['seconds']:.3f}"
-    command = ["ffmpeg", "-y", "-i", str(silent)]
+    command = ["ffmpeg", "-y", "-reinit_filter", "0", "-i", str(silent)]  # one filter graph from first frame to last
     for index in range(len(captions)):
         command += ["-i", str(work / f"caption-{index:03d}.png")]
     audio_inputs = []
@@ -439,6 +448,8 @@ def check(timing: dict[str, Any], captions: list[dict[str, Any]], assets: dict[s
     out = [
         {"check": "size", "ok": (file["width"], file["height"]) == (WIDTH, HEIGHT), "detail": f"{file['width']}x{file['height']}"},
         {"check": "length", "ok": MIN_SECONDS <= timing["seconds"] <= MAX_SECONDS, "detail": f"{timing['seconds']:.1f}s"},
+        {"check": "picture", "ok": abs(file.get("picture_seconds", 0) - timing["seconds"]) <= 0.5,
+         "detail": f"{file.get('picture_seconds', 0):.1f}s of picture for {timing['seconds']:.1f}s of sound"},
         {"check": "sound", "ok": "voiceover" in assets,
          "detail": "voiceover" if "voiceover" in assets else "No voiceover: silent preview, timing is assumed."},
         {"check": "caption timing", "ok": timing["source"] == "measured",

@@ -33,7 +33,7 @@ from cmsbot.hub.service import (
 from cmsbot import carousel
 from cmsbot.hub import brand as brand_kit
 from cmsbot.hub import fetch, palette
-from cmsbot.hub import due
+from cmsbot.hub import cadence, due
 from cmsbot.hub import generate as generation
 from cmsbot.hub import skills
 from cmsbot.hub import jobs
@@ -630,6 +630,14 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
     @app.put("/api/projects/{slug}/rhythm")
     def put_rhythm(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
         return {"rhythm": due.set_rhythm(hub, actor, slug, body)}
+
+    @app.put("/api/projects/{slug}/cadence")
+    def put_cadence(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):
+        return {"cadence": cadence.set_cadence(hub, actor, slug, body)}
+
+    @app.post("/api/projects/{slug}/cadence/backlog")
+    def post_cadence_backlog(slug: str, actor: Actor = Depends(who)):
+        return cadence.schedule_backlog(hub, actor, slug)
 
     @app.post("/api/projects/{slug}/runs")
     def post_run(slug: str, body: dict[str, Any] = Body(...), actor: Actor = Depends(who)):

@@ -233,7 +233,22 @@ async function renderSettings(){current=null;dirty=false;$("list").replaceChildr
   const drawRecipe=()=>{const p=projects.find(x=>x.slug===rp.value);if(!p){rbox.replaceChildren();return}const g=seriesGrid(p.settings.recipe||[]);
     rbox.replaceChildren(g.node,el("button",{class:"btn primary",style:"margin-top:6px",text:"Save default series",onclick:async()=>{try{const r=await api(`/projects/${p.slug}/recipe`,"PUT",{recipe:g.plan()});p.settings.recipe=r.recipe;toast("Saved");drawRecipe()}catch(e){toast(e.message)}}}))};
   rp.addEventListener("change",drawRecipe);parts.push(el("h2",{text:"Default series for each anchor"}),el("p",{style:"color:var(--muted);margin:0 0 8px",text:"What a new blog or guide gets unless you choose otherwise. Adjust any single anchor on its own page."}),rp,rbox);
-  d.replaceChildren(...parts);drawRecipe();await drawKeys()}
+  const cbox=el("div");
+  const drawCadence=()=>{const p=projects.find(x=>x.slug===rp.value);if(!p){cbox.replaceChildren();return}
+    const saved=p.settings.cadence||{},rules=saved.channels||{};
+    const tz=el("input",{type:"text",style:"width:230px",placeholder:"America/Los_Angeles"});tz.value=saved.timezone||Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC";
+    const rows=["x","threads","linkedin","facebook","instagram","tiktok","youtube","reddit","email"].map(name=>{const times=el("input",{type:"text",style:"width:260px",placeholder:"none: due as soon as approved"}),most=el("input",{type:"text",style:"width:54px"});
+      times.value=(rules[name]?.times||[]).join(", ");most.value=rules[name]?.per_day??"";return{name,times,most}});
+    const collect=()=>{const channels={...rules};for(const r of rows){const list=r.times.value.split(",").map(t=>t.trim()).filter(Boolean);
+      if(list.length)channels[r.name]={times:list,per_day:r.most.value.trim()||list.length,days:rules[r.name]?.days};else delete channels[r.name]}return{timezone:tz.value.trim()||"UTC",channels}};
+    const save=async()=>{const r=await api(`/projects/${p.slug}/cadence`,"PUT",collect());p.settings.cadence=r.cadence};
+    cbox.replaceChildren(el("div",{class:"entry",style:"align-items:center;margin-bottom:6px"},el("span",{text:"Time zone"}),tz),
+      el("table",{},el("tr",{},...["Channel","Posting times (24-hour clock, comma separated)","Most a day"].map(h=>el("th",{text:h}))),...rows.map(r=>el("tr",{},el("td",{text:r.name}),el("td",{},r.times),el("td",{},r.most)))),
+      el("div",{class:"entry",style:"margin-top:6px"},el("button",{class:"btn primary",text:"Save posting times",onclick:async()=>{try{await save();toast("Saved");drawCadence()}catch(e){toast(e.message)}}}),
+        el("button",{class:"btn",title:"Gives every approved post that has no time the next free one, taking turns between anchors.",text:"Save and schedule approved posts",onclick:async()=>{try{await save();const r=await api(`/projects/${p.slug}/cadence/backlog`,"POST",{});
+          toast(`${r.scheduled.length} scheduled`+(r.no_times_for_channel.length?`; ${r.no_times_for_channel.length} left on channels with no times`:""));drawCadence()}catch(e){toast(e.message)}}})))};
+  rp.addEventListener("change",drawCadence);parts.push(el("h2",{text:"Posting times"}),el("p",{style:"color:var(--muted);margin:0 0 8px",text:"For the project chosen above. A post approved without a time takes the channel's next free one, so approved posts go out spread over days instead of all at once. Posts already approved keep no time until you schedule them here."}),cbox);
+  d.replaceChildren(...parts);drawRecipe();drawCadence();await drawKeys()}
 $("setupForm").addEventListener("submit",async e=>{e.preventDefault();try{const r=await fetch("/api/setup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({code:$("setupCode").value,name:$("setupName").value})});const data=await r.json();if(!r.ok)throw new Error(data.error);
   $("setupForm").hidden=true;$("setupDone").replaceChildren(tokenPanel({name:$("setupName").value||"reviewer",role:"admin",token:data.token}),el("p",{},el("button",{class:"btn primary",text:"I saved it — continue",onclick:()=>{token=data.token;localStorage.setItem("cmsbot_token",token);$("setupDone").replaceChildren();start()}})))}catch(err){toast(err.message)}});
 async function start(){if(!token)return signOut();try{me=await api("/me")}catch(e){return}
@@ -279,6 +294,7 @@ function renderDetail(){const it=current, d=$("detail");const reviewable=["in_re
   const title=el("input",{type:"text",style:"font-size:19px;font-weight:650"});title.value=draft.title;title.disabled=locked;title.addEventListener("input",()=>{draft.title=title.value;touch()});
   const parts=[el("div",{class:"m",style:"display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"},el("span",{class:"chip",text:"#"+it.id}),el("span",{class:"chip",text:it.project}),el("span",{class:"chip",text:it.channel+" · "+it.kind.replace("_"," ")}),
     el("span",{class:"chip "+(ready?"ok":it.status==="failed"||it.status==="rejected"?"bad":""),text:it.status.replace("_"," ")}),it.account?el("span",{class:"chip",text:"@"+it.account}):null,
+    it.scheduled_at&&ready?el("span",{class:"chip",title:"Posting time. The posting agent sends it then, not before.",text:"goes out "+local(it.scheduled_at)}):null,
     it.cost_usd?el("span",{class:"chip",text:"$"+it.cost_usd}):null,it.parent_id?el("a",{href:"#",class:"chip",text:"from #"+it.parent_id,onclick:e=>{e.preventDefault();if(leaveOk())open(it.parent_id)}}):null,
     ...Object.entries(it.attributes).map(([k,v])=>el("span",{class:"chip",text:k+": "+v}))),title];
   if(it.error)parts.push(el("div",{class:"note bad",text:it.error}));
@@ -318,7 +334,7 @@ function renderDetail(){const it=current, d=$("detail");const reviewable=["in_re
   const bar=el("div",{class:"actions"});const changes=()=>dirty?{title:draft.title,body:draft.body,link:draft.link,gaps:draft.gaps}:{};
   const run=async(fn,msg)=>{try{await fn();dirty=false;toast(msg);await refresh(it.id)}catch(e){toast(e.message)}};
   if(!locked){bar.append(el("button",{class:"btn",id:"saveBtn",text:"Save edits",disabled:!dirty,onclick:()=>run(()=>api("/items/"+it.id,"PATCH",{...changes(),note:"reviewer edit"}),"Saved")}))}
-  if(reviewable){const when=el("input",{type:"datetime-local",title:"Optional: when it should go out"});
+  if(reviewable){const when=el("input",{type:"datetime-local",title:"Optional: when it should go out. Left empty, it takes the channel's next free posting time (Settings), or is due at once if the channel has none."});
     const approve=()=>run(()=>api(`/items/${it.id}/approve`,"POST",{...changes(),scheduled_at:when.value?new Date(when.value).toISOString():undefined}),"Approved");
     if(it.video_state==="script")bar.append(el("button",{class:"btn primary",id:"approveBtn",text:"Approve script",onclick:()=>run(async()=>{if(dirty)await api("/items/"+it.id,"PATCH",{...changes(),note:"reviewer edit"});await api(`/items/${it.id}/approve-script`,"POST",{})},"Script approved; sent to production")}));
     else bar.append(when,el("button",{class:"btn primary",id:"approveBtn",text:"Approve",onclick:approve}));
