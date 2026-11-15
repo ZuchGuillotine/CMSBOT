@@ -41,8 +41,9 @@ Output lands in `seo/output/`:
 
 - `keywords_YYYY-MM-DD.json`
 - `keywords_YYYY-MM-DD.csv`
-- `evaluation_YYYY-MM-DD.json`
-- `evaluation_YYYY-MM-DD.csv`
+- `evaluation_YYYY-MM-DD.json` (recommendation buckets, plus `queries` and `pages`: the Search Console rows
+  behind the summary, with the prior period for queries seen in both)
+- `evaluation_YYYY-MM-DD.csv` (the same buckets, plus `query` and `page` rows: clicks, impressions, position)
 - `topic_briefs_YYYY-MM-DD.json`
 
 Use the briefs with CMSBOT:

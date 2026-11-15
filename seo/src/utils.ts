@@ -72,6 +72,8 @@ export function generateEvaluationCSV(report: {
   contentGaps: Array<{ keyword: string; seoScore: number; category: string; intent: string }>;
   underperformers: Array<{ slug: string; title: string; daysSincePublish: number; impressions: number }>;
   decliners: Array<{ keyword: string; currentPosition: number; previousPosition: number; positionDelta: number }>;
+  queries?: Array<{ query: string; clicks: number; impressions: number; position: number; pages: string[] }>;
+  pages?: Array<{ page: string; clicks: number; impressions: number; position: number }>;
 }): string {
   const escaped = (s: string) => `"${String(s).replace(/"/g, '""')}"`;
   const lines: string[] = [];
@@ -101,6 +103,18 @@ export function generateEvaluationCSV(report: {
   for (const d of report.decliners) {
     lines.push(
       ['declining', escaped(d.keyword), d.previousPosition.toFixed(1), d.currentPosition.toFixed(1), d.positionDelta.toFixed(1), ''].join(',')
+    );
+  }
+
+  // metric1 = clicks, metric2 = impressions, metric3 = average position
+  for (const q of report.queries ?? []) {
+    lines.push(
+      ['query', escaped(q.query), q.clicks, q.impressions, q.position.toFixed(1), escaped(q.pages[0] ?? '')].join(',')
+    );
+  }
+  for (const p of report.pages ?? []) {
+    lines.push(
+      ['page', escaped(p.page), p.clicks, p.impressions, p.position.toFixed(1), ''].join(',')
     );
   }
 

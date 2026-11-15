@@ -74,6 +74,29 @@ export interface TopicBrief {
   reason: string;
 }
 
+/** One Search Console query for the period, with the prior period when the query appeared in both. */
+export interface QueryRow {
+  query: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+  pages: string[];
+  previousClicks: number | null;
+  previousImpressions: number | null;
+  previousPosition: number | null;
+}
+
+/** One Search Console page for the period (every page on the property, not only blog posts). */
+export interface PageRow {
+  page: string;
+  clicks: number;
+  impressions: number;
+  ctr: number;
+  position: number;
+  queries: string[];
+}
+
 export interface EvaluationReport {
   generatedAt: string;
   period: { days: number; compareDays: number };
@@ -94,6 +117,10 @@ export interface EvaluationReport {
   cannibalization: Cannibalization[];
   topicBriefs: TopicBrief[];
   contentScorecards: ContentScorecard[];
+  /** Query text and numbers behind the summary, most clicks first. Added by evaluate.ts. */
+  queries?: QueryRow[];
+  /** Page totals; these include impressions whose query Search Console withholds. */
+  pages?: PageRow[];
 }
 
 export function evaluate(

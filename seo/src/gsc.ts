@@ -186,6 +186,8 @@ export async function getTopMovers(
     positionDelta: number;
     currentImpressions: number;
     previousImpressions: number;
+    currentClicks: number;
+    previousClicks: number;
   }>
 > {
   const client = await getClient();
@@ -223,11 +225,12 @@ export async function getTopMovers(
     }),
   ]);
 
-  const previousMap = new Map<string, { position: number; impressions: number }>();
+  const previousMap = new Map<string, { position: number; impressions: number; clicks: number }>();
   for (const row of previousRes.data.rows || []) {
     previousMap.set(row.keys![0], {
       position: row.position || 0,
       impressions: row.impressions || 0,
+      clicks: row.clicks || 0,
     });
   }
 
@@ -238,6 +241,8 @@ export async function getTopMovers(
     positionDelta: number;
     currentImpressions: number;
     previousImpressions: number;
+    currentClicks: number;
+    previousClicks: number;
   }> = [];
 
   for (const row of currentRes.data.rows || []) {
@@ -252,6 +257,8 @@ export async function getTopMovers(
         positionDelta: delta,
         currentImpressions: row.impressions || 0,
         previousImpressions: prev.impressions,
+        currentClicks: row.clicks || 0,
+        previousClicks: prev.clicks,
       });
     }
   }

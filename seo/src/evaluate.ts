@@ -9,7 +9,7 @@ import {
   buildContentScorecards,
   findContentGaps,
 } from './contentPerformance.js';
-import { evaluate } from './evaluator.js';
+import { evaluate, type QueryRow, type PageRow } from './evaluator.js';
 import type { ScoredKeyword } from './scorer.js';
 import { generateEvaluationCSV } from './utils.js';
 
@@ -28,6 +28,7 @@ const runAll = !gscOnly && !ga4Only;
 const daysIdx = args.indexOf('--days');
 const days = daysIdx >= 0 ? parseInt(args[daysIdx + 1]) || EVALUATION_DAYS : EVALUATION_DAYS;
 const compareDays = COMPARE_DAYS;
+const MAX_REPORT_ROWS = 500;
 
 async function loadLatestSEOKeywords(): Promise<ScoredKeyword[]> {
   try {
@@ -121,6 +122,32 @@ async function main() {
     compareDays
   );
 
+  // Keep the raw rows: the buckets above only hold queries that pass a threshold, so on a low-traffic
+  // site the report would otherwise carry totals with no query text behind them.
+  const previousByQuery = new Map(movers.map(m => [m.query, m]));
+  const queries: QueryRow[] = gscKeywords
+    .map(k => {
+      const prev = previousByQuery.get(k.query);
+      return {
+        query: k.query,
+        clicks: k.clicks,
+        impressions: k.impressions,
+        ctr: k.ctr,
+        position: k.position,
+        pages: k.pages,
+        previousClicks: prev ? prev.previousClicks : null,
+        previousImpressions: prev ? prev.previousImpressions : null,
+        previousPosition: prev ? prev.previousPosition : null,
+      };
+    })
+    .sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions)
+    .slice(0, MAX_REPORT_ROWS);
+  const pages: PageRow[] = [...gscPages]
+    .sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions)
+    .slice(0, MAX_REPORT_ROWS);
+  report.queries = queries;
+  report.pages = pages;
+
   // Write outputs
   const timestamp = new Date().toISOString().split('T')[0];
 
@@ -153,6 +180,15 @@ async function main() {
   console.log(`Total impressions: ${report.summary.totalImpressions.toLocaleString()}`);
   console.log(`Total clicks:     ${report.summary.totalClicks.toLocaleString()}`);
   console.log(`Overall CTR:      ${(report.summary.overallCTR * 100).toFixed(2)}%`);
+
+  if (queries.length > 0) {
+    console.log(`\n--- Top Queries (${queries.length}) ---`);
+    for (const q of queries.slice(0, 10)) {
+      console.log(
+        `  ${q.clicks.toString().padEnd(4)} clicks  ${q.impressions.toString().padEnd(6)} imp  pos ${q.position.toFixed(1).padEnd(6)} "${q.query}"`
+      );
+    }
+  }
 
   if (report.quickWins.length > 0) {
     console.log(`\n--- Quick Wins (${report.quickWins.length}) ---`);
