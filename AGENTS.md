@@ -32,8 +32,12 @@ python -m cmsbot generate "Your prompt"
 pip install -e ".[dev]"
 ruff check src/
 
-# Tests (none yet — pytest + pytest-asyncio are dev deps)
+# Tests
 pytest
+
+# Hub (shared state, review page, MCP endpoint) — see docs/hub.md
+cmsbot hub init
+cmsbot hub serve
 ```
 
 ## Architecture
@@ -93,3 +97,16 @@ All providers implement `LLMProvider.generate()` → `LLMResponse` (normalized c
 - `cmsbot review de-ai` writes `distribution/<platform>/de_ai_report.json`, `distribution/<platform>/review.md`, and an `output/runs/<run-id>/run.json` record.
 - `cmsbot review gates` shows `draft_ready`, `de_ai_passed`, `human_approved`, and `publish_ready`; publishing requires all gates to pass.
 - Publishing remains product-repo-specific and human-gated. Core should prepare artifacts and review reports, not post externally.
+
+## Hub and skills (refactor in progress)
+
+- Read `docs/refactor-plan.md` first: it has the direction, decisions, what is done and what is next.
+- `src/cmsbot/hub/` is the shared content state for all projects: `store.py` (SQLite), `service.py`
+  (roles, lifecycle, approval, distribution hand-off), `stats.py` (performance analysis), `app.py`
+  (review page, REST, MCP), `push.py` (asset set to Hub items), `cli.py` (`cmsbot hub ...`).
+- All rules live in `service.py`; REST and MCP are thin wrappers. Add a rule there, with a test in
+  `tests/test_hub.py`, not in a route.
+- Agents must never be able to approve or post unapproved copy. Keep the role checks when changing
+  `service.py`.
+- `skills/` holds the methods (plan, write, short video, distribute, analyze, onboard). A new
+  capability is a new skill folder, not a new pipeline stage.

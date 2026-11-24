@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 # Prices per 1M tokens (USD) — update as pricing changes
 MODEL_COSTS: dict[str, dict[str, float]] = {
     # Anthropic
+    "claude-opus-5-5": {"input": 4.00, "output": 20.00},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00},
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50},
     "claude-opus-4-6": {"input": 5.00, "output": 25.00},
     "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
     "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},

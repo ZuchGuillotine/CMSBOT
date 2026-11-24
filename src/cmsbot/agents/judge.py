@@ -97,10 +97,15 @@ Rank these three candidates from best to worst. Output ONLY a JSON array like [1
         # Borda count: 1st place = 2 pts, 2nd = 1 pt, 3rd = 0 pts
         scores = [0, 0, 0]  # scores for shuffled candidates 1, 2, 3
         for j in judgments:
-            for rank_pos, candidate_num in enumerate(j.ranking):
+            # Unparseable judgments abstain instead of silently voting 1 > 2 > 3
+            for rank_pos, candidate_num in enumerate(j.ranking or []):
                 idx = candidate_num - 1  # Convert 1-indexed to 0-indexed
                 if 0 <= idx < 3:
                     scores[idx] += 2 - rank_pos
+
+        if not any(j.ranking for j in judgments):
+            # Every judge abstained: keep the current draft rather than pick at random
+            return 0, labels[0], judgments, responses
 
         # Winner in shuffled order
         shuffled_winner = scores.index(max(scores))
@@ -111,14 +116,18 @@ Rank these three candidates from best to worst. Output ONLY a JSON array like [1
         return original_winner, winner_label, judgments, responses
 
 
-def _parse_ranking(text: str) -> list[int]:
-    """Parse a JSON ranking array from potentially messy LLM output."""
+def _is_permutation(values: list[int]) -> bool:
+    return sorted(values) == [1, 2, 3]
+
+
+def _parse_ranking(text: str) -> list[int] | None:
+    """Parse a ranking of candidates 1-3 from messy LLM output; None if there isn't one."""
     text = text.strip()
 
     # Try direct JSON parse
     try:
         result = json.loads(text)
-        if isinstance(result, list) and len(result) == 3:
+        if isinstance(result, list) and len(result) == 3 and _is_permutation([int(x) for x in result]):
             return [int(x) for x in result]
     except (json.JSONDecodeError, ValueError):
         pass
@@ -126,12 +135,8 @@ def _parse_ranking(text: str) -> list[int]:
     # Try to find a JSON array in the text
     match = re.search(r'\[[\s]*(\d)[\s]*,[\s]*(\d)[\s]*,[\s]*(\d)[\s]*\]', text)
     if match:
-        return [int(match.group(1)), int(match.group(2)), int(match.group(3))]
+        ranking = [int(match.group(1)), int(match.group(2)), int(match.group(3))]
+        if _is_permutation(ranking):
+            return ranking
 
-    # Fallback: look for any 3 digits
-    digits = re.findall(r'[1-3]', text)
-    if len(digits) >= 3:
-        return [int(digits[0]), int(digits[1]), int(digits[2])]
-
-    # Last resort: default ranking
-    return [1, 2, 3]
+    return None

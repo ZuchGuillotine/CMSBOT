@@ -431,7 +431,47 @@ XAI_API_KEY=
 UNSPLASH_ACCESS_KEY=
 ```
 
-For blog image generation, CMSBOT can use any configured combination of Grok Imagine, Nano Banana, Unsplash, and DALL-E fallback, then run an image judge to pick the most natural-looking candidate.
+For blog image generation, CMSBOT can use any configured combination of Grok Imagine, Nano Banana, Unsplash, and GPT Image, then run an image judge to pick the most natural-looking candidate.
+
+Any single LLM key is enough: each pipeline role (author, strawman, rewriter, synthesizer, judges, planner,
+restructurer, auditor) falls back to a configured provider. Override with `CMSBOT_ROLE_<ROLE>=<provider>`
+(`CMSBOT_ROLE_JUDGES=anthropic_opus,openai,gemini`). Claude defaults are `claude-sonnet-5-5` (`ANTHROPIC_MODEL`)
+and `claude-opus-5-5` (`ANTHROPIC_OPUS_MODEL`). Other knobs: `CMSBOT_DE_AI_RUBRIC_FILE` (de-AI thresholds),
+`CMSBOT_VARIETY_LEDGER` (multipass structure history), `NCBI_API_KEY` / `NCBI_EMAIL` (PubMed rate limits).
+
+## Multipass Method
+
+`cmsbot generate "<brief>" --type blog --method multipass [--no-pubmed] [--no-images]`
+
+Implements the multipass-writing method: structure is what gives AI text away, rewording doesn't change it,
+and the shape is set at planning time. Stages:
+
+1. **Material** - PubMed search for the brief, then sourced material and `[bracket]` gaps (never invented specifics)
+2. **Plan** - explicit structural decisions and a rarity check, steered away from recent pieces (variety ledger)
+3. **Draft** - written unit by unit from the plan, citing studies inline
+4. **Structure** - audit of the AI-leaning structural features; fixes cut, move or replace units (max 2 rounds)
+5. **Surface** - `shape_check` metrics plus de-AI heuristics; hard patterns get one plain-statement fix
+6. **Fit** - claims extracted and every PMID/DOI verified; remaining gaps listed for the reviewer
+
+Outputs in `source/`: `content.md`, `index.html`, `material.json`, `plan.json`, `audit.json`, `claims.json`,
+`gaps.json`. Measure any draft with `python -m cmsbot.multipass.shape_check draft.md`.
+
+### Derivatives (light run)
+
+`cmsbot derive <asset-set> --kind newsletter|thread|video_script [--count N] [--focus "..."] [--claims-file ledger.json] [--include-unverified] [--anchor-url URL]`
+
+Turns a multipass anchor into a newsletter, X threads or short-video scripts that may only restate the
+anchor's claim ledger (the verified claims in `source/claims.json`, or a `--claims-file` exported from a
+review queue). One drafting call per kind (`drafter` role), then gates on each item:
+
+- **Ledger**: every figure must appear in a ledger claim; every item lists the `claim_ids` it uses
+- **Testimonials**: first-person anecdotes and "my client" stories are flagged
+- **Surface**: `shape_check` hard patterns and de-AI heuristics, measured per platform
+
+Failures get one fix pass (`restructurer` role); whatever remains is recorded in the item's `audit.remaining`
+with any `[gaps]`. Output: `distribution/derivatives/<kind>.json`. Newsletters keep `{{anchor_url}}` for the
+article link unless `--anchor-url` is given, and include `body_html`. Defaults: 1 newsletter, 5 threads, 3 videos.
+Cost is roughly $0.07-0.13 per kind with Opus as drafter.
 
 ## Repo Layout
 

@@ -27,6 +27,9 @@ SAFE_TAGS = {
     "linearGradient",
     "radialGradient",
     "stop",
+    # Accessibility metadata: plain text, never rendered; models add <title> often
+    "title",
+    "desc",
 }
 SAFE_ATTRS = {
     "aria-label",
@@ -39,6 +42,7 @@ SAFE_ATTRS = {
     "fill-opacity",
     "font-family",
     "font-size",
+    "font-style",
     "font-weight",
     "height",
     "id",

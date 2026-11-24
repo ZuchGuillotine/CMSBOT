@@ -59,6 +59,7 @@ def _markdown_to_html(content: str, images: list[ImageSpec]) -> str:
     in_code_block = False
     in_table = False
     section_count = 0
+    placed: set[int] = set()
 
     for line in lines:
         stripped = line.strip()
@@ -130,12 +131,8 @@ def _markdown_to_html(content: str, images: list[ImageSpec]) -> str:
                 None,
             )
             if section_img:
-                html_parts.append(
-                    f'<figure class="section-image">'
-                    f'<img src="{section_img.file_path}" alt="{_escape_html(section_img.alt_text)}" loading="lazy">'
-                    f'<figcaption>{_escape_html(section_img.alt_text)}</figcaption>'
-                    f'</figure>'
-                )
+                html_parts.append(_figure_html(section_img))
+                placed.add(id(section_img))
             continue
         if stripped.startswith("# "):
             html_parts.append(f"<h1>{_inline_format(stripped[2:])}</h1>")
@@ -178,7 +175,49 @@ def _markdown_to_html(content: str, images: list[ImageSpec]) -> str:
     if in_code_block:
         html_parts.append("</code></pre>")
 
+    _place_leftover_section_images(html_parts, images, placed)
     return "\n".join(html_parts)
+
+
+def _figure_html(img: ImageSpec) -> str:
+    alt = _escape_html(img.alt_text)
+    return (
+        f'<figure class="section-image">'
+        f'<img src="{img.file_path}" alt="{alt}" loading="lazy">'
+        f'<figcaption>{alt}</figcaption>'
+        f'</figure>'
+    )
+
+
+def _section_number(placement: str) -> int | None:
+    match = re.fullmatch(r"section-(\d+)", placement or "")
+    return int(match.group(1)) if match else None
+
+
+def _place_leftover_section_images(html_parts: list[str], images: list[ImageSpec], placed: set[int]) -> None:
+    """Spread section images that had no matching ## heading evenly between paragraphs.
+
+    Drafts with fewer ## headings than planned section images (multipass essays often have none)
+    would otherwise drop images that were already generated and paid for.
+    """
+    leftover = sorted(
+        (img for img in images
+         if img.file_path and id(img) not in placed and _section_number(img.placement) is not None),
+        key=lambda img: _section_number(img.placement),
+    )
+    if not leftover:
+        return
+    # Skip lead-ins ending in ":" so an image never separates them from the list they introduce
+    paragraphs = [i for i, part in enumerate(html_parts) if part.startswith("<p>") and not part.endswith(":</p>")]
+    if not paragraphs:
+        html_parts.extend(_figure_html(img) for img in leftover)
+        return
+    n, count = len(leftover), len(paragraphs)
+    # After paragraph k*count/(n+1) for k = 1..n, so images sit between the intro and the close
+    slots = [paragraphs[max(0, min(count - 1, round(k * count / (n + 1)) - 1))] for k in range(1, n + 1)]
+    # slots never decrease, so inserting back to front keeps earlier indices and image order intact
+    for slot, img in reversed(list(zip(slots, leftover))):
+        html_parts.insert(slot + 1, _figure_html(img))
 
 
 def _inline_format(text: str) -> str:

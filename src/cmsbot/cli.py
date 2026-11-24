@@ -41,6 +41,7 @@ from cmsbot.goals import (
     prepare_goal_handoff,
     summarize_goal_run,
 )
+from cmsbot.multipass import MultipassPipeline
 from cmsbot.pipeline import AutoreasonPipeline
 from cmsbot.project import (
     combine_context_text,
@@ -74,8 +75,21 @@ console = Console()
 @click.group()
 @click.version_option(package_name="cmsbot")
 def main():
-    """CMSBOT — Multi-agent content refinement using the Autoreason pattern."""
+    """CMSBOT — content planning, drafting, review hand-off and measurement."""
     pass
+
+
+def _register_hub() -> None:
+    try:
+        from cmsbot.hub.cli import carousel_group, hub_group, video_group
+    except ImportError:  # hub extras not installed: `pip install "cmsbot[hub]"`
+        return
+    main.add_command(hub_group)
+    main.add_command(carousel_group)
+    main.add_command(video_group)
+
+
+_register_hub()
 
 
 @main.command()
@@ -93,6 +107,11 @@ def main():
     type=click.Path(),
     default=None,
     help="Output directory (default: ./output/<slug>).",
+)
+@click.option(
+    "--asset-set-id",
+    default=None,
+    help="Canonical asset-set id for default output layout, e.g. a calendar entry id.",
 )
 @click.option(
     "--budget",
@@ -136,10 +155,20 @@ def main():
     show_default=True,
     help="Execution strategy marker. Only autoreason runs in-core; other modes are for external agent workflows.",
 )
+@click.option(
+    "--method",
+    type=click.Choice(["autoreason", "multipass"]),
+    default="autoreason",
+    show_default=True,
+    help="Long-form method. multipass plans structure first, grounds in PubMed, audits shape, and verifies citations.",
+)
+@click.option("--no-pubmed", is_flag=True, default=False, help="multipass: skip the PubMed source search.")
+@click.option("--no-images", is_flag=True, default=False, help="multipass: skip image generation.")
 def generate(
     prompt: str,
     content_type: str,
     output_dir: str | None,
+    asset_set_id: str | None,
     budget: float | None,
     max_rounds: int | None,
     context_file: str | None,
@@ -147,8 +176,11 @@ def generate(
     style: str | None,
     env_file: str | None,
     execution_mode: str,
+    method: str,
+    no_pubmed: bool,
+    no_images: bool,
 ):
-    """Generate refined content using the Autoreason multi-agent pipeline."""
+    """Generate refined content using the Autoreason or multipass pipeline."""
     if execution_mode != "autoreason":
         console.print(
             "[red]Error:[/red] In-core generation currently supports only `autoreason`. "
@@ -165,10 +197,16 @@ def generate(
     if max_rounds is not None:
         config.max_rounds = max_rounds
 
+    output_root = config.output_dir
+    if method == "multipass" and content_type != "blog":
+        console.print("[red]Error:[/red] --method multipass supports --type blog only.")
+        sys.exit(1)
+
     layout = prepare_generate_layout(
         config.output_dir,
         prompt,
         requested_output_dir=Path(output_dir) if output_dir else None,
+        requested_asset_set_id=asset_set_id,
     )
     initialize_generate_layout(layout)
     config.output_dir = layout.source_dir
@@ -234,7 +272,7 @@ def generate(
     style_label = style or "none"
     console.print()
     console.print(Panel.fit(
-        f"[bold]CMSBOT Autoreason Pipeline[/bold]\n\n"
+        f"[bold]CMSBOT {'Multipass' if method == 'multipass' else 'Autoreason'} Pipeline[/bold]\n\n"
         f"[dim]Prompt:[/dim]   {prompt}\n"
         f"[dim]Type:[/dim]     {content_type}\n"
         f"[dim]Context:[/dim]  {context_label}\n"
@@ -249,15 +287,24 @@ def generate(
     console.print()
 
     # Run pipeline
-    pipeline = AutoreasonPipeline(config)
+    artifacts = None
+    if method == "multipass":
+        pipeline = MultipassPipeline(config, use_pubmed=not no_pubmed, images=not no_images)
+    else:
+        pipeline = AutoreasonPipeline(config)
     pipeline.set_logger(lambda msg: console.print(msg))
 
     try:
-        result = asyncio.run(pipeline.run(
-            task_prompt=task_prompt,
-            content_type=content_type,
-            output_dir=layout.source_dir,
-        ))
+        if method == "multipass":
+            result, artifacts = asyncio.run(pipeline.run(
+                task_prompt, layout.source_dir, ledger_dir=output_root,
+            ))
+        else:
+            result = asyncio.run(pipeline.run(
+                task_prompt=task_prompt,
+                content_type=content_type,
+                output_dir=layout.source_dir,
+            ))
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted by user.[/yellow]")
         sys.exit(1)
@@ -287,6 +334,161 @@ def generate(
         asset_set_dir=layout.asset_set_dir,
         source_dir=layout.source_dir,
         manifest_path=manifest_path,
+    )
+    if artifacts is not None:
+        unverified = [c for c in artifacts.claims if c["verification"]["status"] != "verified"]
+        console.print(f"\n[bold]Review notes[/bold]: {len(artifacts.gaps)} gap(s) to fill, "
+                      f"{len(unverified)} claim(s) without a verified citation.")
+        for gap in artifacts.gaps:
+            console.print(f"  [yellow][{gap}][/yellow]")
+
+
+@main.command()
+@click.argument("asset_set_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--kind", "kinds", multiple=True, required=True,
+              type=click.Choice(["newsletter", "thread", "video_script", "carousel"]),
+              help="Derivative kind; repeat for several (e.g. --kind newsletter --kind thread).")
+@click.option("--count", type=int, default=None,
+              help="Items per kind (defaults: newsletter 1, thread 5, video_script 3, carousel 1).")
+@click.option("--focus", default=None, help="newsletter: this week's focus area (e.g. 'sleep and recovery').")
+@click.option("--claims-file", type=click.Path(exists=True, dir_okay=False, path_type=Path), default=None,
+              help="Claim ledger JSON ({\"claims\": [...]}); default: the anchor's source/claims.json.")
+@click.option("--include-unverified", is_flag=True, default=False,
+              help="Also use cited claims whose citation wasn't verified.")
+@click.option("--ledger-from-anchor", is_flag=True, default=False,
+              help="Build the ledger from the anchor's own text (for articles written before claim ledgers).")
+@click.option("--anchor-url", default=None,
+              help="Public URL of the anchor article; newsletters keep {{anchor_url}} when omitted.")
+@click.option("--context-file", "-c", type=click.Path(exists=True), default=None)
+@click.option("--project-file", "-p", type=click.Path(exists=True), default=None)
+@click.option("--style", "-s", default=None)
+@click.option("--env-file", type=click.Path(exists=True), default=None)
+@click.option("--budget", type=float, default=None, help="Budget cap in USD per kind.")
+def derive(
+    asset_set_dir: Path,
+    kinds: tuple[str, ...],
+    count: int | None,
+    focus: str | None,
+    claims_file: Path | None,
+    include_unverified: bool,
+    ledger_from_anchor: bool,
+    anchor_url: str | None,
+    context_file: str | None,
+    project_file: str | None,
+    style: str | None,
+    env_file: str | None,
+    budget: float | None,
+):
+    """Write newsletter, thread, video-script and carousel derivatives of an anchor piece (multipass light run).
+
+    Derivatives may only restate claims from the anchor's claim ledger. Output goes to
+    <asset-set>/distribution/derivatives/<kind>.json.
+    """
+    from cmsbot.content_ops import resolve_asset_set_root
+    from cmsbot.multipass.derive import ANCHOR_URL_TOKEN, DeriveError, DerivePipeline, load_ledger, write_derivatives
+
+    config = Config.from_env(env_file)
+    if budget is not None:
+        config.budget_cap = budget
+    asset_root = resolve_asset_set_root(asset_set_dir)
+    source_dir = asset_root / "source"
+    content_path = source_dir / "content.md"
+    if not content_path.exists():
+        console.print(f"[red]Error:[/red] No anchor content at {content_path}")
+        sys.exit(1)
+    anchor_text = content_path.read_text(encoding="utf-8").strip()
+    title_line = next((line for line in anchor_text.splitlines() if line.startswith("# ")), "# Untitled")
+    claims_path = claims_file or source_dir / "claims.json"
+    if ledger_from_anchor:
+        claims, ledger = [], []
+    elif not claims_path.exists():
+        console.print(f"[red]Error:[/red] No claim ledger at {claims_path}. Run generate --method multipass first, pass --claims-file, or use --ledger-from-anchor.")
+        sys.exit(1)
+    else:
+        claims = json.loads(claims_path.read_text(encoding="utf-8")).get("claims", [])
+        ledger = load_ledger(claims, include_unverified=include_unverified)
+
+    project_context = load_project_profile(project_file).render_context_markdown() if project_file else None
+    brief = build_enriched_prompt(
+        "Write derivatives of the anchor article below for the project's channels.",
+        context=combine_context_text(project_context, load_context_file(context_file) if context_file else None),
+        style=load_style(style) if style else None,
+    )
+
+    if ledger_from_anchor:
+        extractor = DerivePipeline(config)
+        extractor.set_logger(lambda msg: console.print(msg))
+        ledger = asyncio.run(extractor.extract_ledger(anchor_text))
+        claims = ledger
+    console.print(f"[bold]Derive[/bold] {', '.join(kinds)} from {asset_root.name} ({len(ledger)} of {len(claims)} claims usable)")
+    for kind in kinds:
+        pipeline = DerivePipeline(config)
+        pipeline.set_logger(lambda msg: console.print(msg))
+        try:
+            payload = asyncio.run(pipeline.run(
+                kind, brief=brief, anchor_title=title_line[2:].strip(), anchor_text=anchor_text,
+                ledger=ledger, count=count, focus=focus, anchor_url=anchor_url or ANCHOR_URL_TOKEN,
+            ))
+        except DeriveError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            sys.exit(1)
+        path = write_derivatives(asset_root, payload)
+        console.print(f"[green]Wrote[/green] {path}")
+        for i, item in enumerate(payload["items"], 1):
+            notes = item["audit"]["remaining"] + [f"[{g}]" for g in item["gaps"]]
+            if notes:
+                console.print(f"  item {i}: " + "; ".join(notes[:5]))
+
+
+@main.command()
+@click.argument("asset_set_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--no-images", is_flag=True, default=False, help="Keep the existing images instead of planning new ones.")
+@click.option("--context-file", "-c", type=click.Path(exists=True), default=None)
+@click.option("--project-file", "-p", type=click.Path(exists=True), default=None)
+@click.option("--style", "-s", default=None)
+@click.option("--env-file", type=click.Path(exists=True), default=None)
+@click.option("--budget", type=float, default=None, help="Budget cap in USD.")
+def refresh(
+    asset_set_dir: Path,
+    no_images: bool,
+    context_file: str | None,
+    project_file: str | None,
+    style: str | None,
+    env_file: str | None,
+    budget: float | None,
+):
+    """Restructure a finished blog: ## headings, tables, rule fixes and new section images; no new facts.
+
+    The previous content.md, index.html and images are kept in source/pre-refresh-<time>/.
+    """
+    from cmsbot.content_ops import resolve_asset_set_root
+    from cmsbot.multipass.refresh import RefreshError, RefreshPipeline
+
+    config = Config.from_env(env_file)
+    if budget is not None:
+        config.budget_cap = budget
+    asset_root = resolve_asset_set_root(asset_set_dir)
+    project_context = load_project_profile(project_file).render_context_markdown() if project_file else None
+    brief = build_enriched_prompt(
+        "Revise the article below for the project's blog.",
+        context=combine_context_text(project_context, load_context_file(context_file) if context_file else None),
+        style=load_style(style) if style else None,
+    )
+    manifest_path = asset_root / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    task_prompt = str(manifest.get("prompt") or asset_root.name)
+
+    pipeline = RefreshPipeline(config, images=not no_images)
+    pipeline.set_logger(lambda msg: console.print(msg))
+    console.print(f"[bold]Refresh[/bold] {asset_root.name}")
+    try:
+        report = asyncio.run(pipeline.run(asset_root, brief, task_prompt))
+    except RefreshError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        sys.exit(1)
+    console.print(
+        f"REFRESH COMPLETE | {report['headings']} headings | {report['tables']} tables | "
+        f"{len(report['images'])} images | {report['gaps']} gaps | ${report['cost']:.4f} | backup {report['backup']}"
     )
 
 

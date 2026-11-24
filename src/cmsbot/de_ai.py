@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -33,10 +35,10 @@ GENERIC_PHRASES = [
     "take your",
 ]
 
+# "always"/"never" were dropped: in health copy they are usually accurate
+# instructions ("never take iron with calcium"), and flagged nearly every post.
 INFLATED_CLAIMS = [
     "guaranteed",
-    "always",
-    "never",
     "everyone",
     "no one",
     "proven to",
@@ -44,6 +46,41 @@ INFLATED_CLAIMS = [
     "best-in-class",
     "industry-leading",
 ]
+
+# Disease claims are off-limits for supplement content (FTC/FDA structure-function rules).
+DISEASE_CLAIM_PATTERN = re.compile(
+    r"\b(cures?|cured|treats?|treating|heals?|prevents?|reverses?)\b[^.]{0,40}\b(disease|disorder|cancer|diabetes|depression|anxiety|insomnia|infection|condition)s?\b"
+)
+
+# Contrast frames ("X, not Y", "it's not X, it's Y") are a strong LLM tell and
+# banned in most project style files.
+CONTRAST_FRAME_PATTERN = re.compile(
+    r"(\bnot (just|only|merely|simply)\b|\bisn'?t (just|about)\b|\bmore than just\b"
+    r"|\bit'?s not\b[^.]{0,60}\bit'?s\b|,\s*not\s+(the\s+|a\s+|an\s+)?\w+[^,.]{0,25}[.!])",
+    re.IGNORECASE,
+)
+
+DEFAULT_THRESHOLDS = {"pass": 80, "human_review": 65, "rewrite": 50}
+DEFAULT_RUBRIC_FILE = Path(__file__).resolve().parents[2] / "strategy" / "de-ai-rubrics.json"
+
+
+@lru_cache(maxsize=4)
+def _thresholds_from(path: str) -> dict[str, int]:
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return dict(DEFAULT_THRESHOLDS)
+    raw = data.get("score_thresholds") if isinstance(data, dict) else None
+    thresholds = dict(DEFAULT_THRESHOLDS)
+    if isinstance(raw, dict):
+        thresholds.update({k: int(v) for k, v in raw.items() if k in thresholds and isinstance(v, (int, float))})
+    return thresholds
+
+
+def score_thresholds() -> dict[str, int]:
+    """pass / human_review / rewrite thresholds from the rubric file (CMSBOT_DE_AI_RUBRIC_FILE overrides)."""
+    return _thresholds_from(os.getenv("CMSBOT_DE_AI_RUBRIC_FILE") or str(DEFAULT_RUBRIC_FILE))
+
 
 AWKWARD_CTAS = [
     "click here",
@@ -163,6 +200,20 @@ def heuristic_review(
         flags.append("inflated claims")
         recommendations.append("Soften absolute claims or add evidence before publishing.")
 
+    if DISEASE_CLAIM_PATTERN.search(lower):
+        score -= 15
+        flags.append("disease claim")
+        recommendations.append("Remove treat/cure/prevent-disease language; use structure/function wording.")
+
+    contrast_hits = CONTRAST_FRAME_PATTERN.findall(text)
+    per_k = len(contrast_hits) * 1000 / max(len(text.split()), 1)
+    if len(contrast_hits) >= 2 and per_k >= 2:
+        score -= min(15, len(contrast_hits) * 3)
+        flags.append("contrast frames")
+        recommendations.append(
+            f"{len(contrast_hits)} 'X, not Y' / 'not just X' frames; state the claim directly instead."
+        )
+
     cta_hits = [phrase for phrase in AWKWARD_CTAS if phrase in lower]
     if cta_hits:
         score -= min(12, len(cta_hits) * 4)
@@ -200,7 +251,9 @@ def heuristic_review(
         recommendations.append("Remove image-generation prompt residue from publishable copy.")
 
     score = max(0, min(100, score))
-    requires_human_review = score < 80 or bool(set(flags) & {"inflated claims", "platform mismatch"})
+    requires_human_review = score < score_thresholds()["pass"] or bool(
+        set(flags) & {"inflated claims", "platform mismatch", "disease claim"}
+    )
 
     return {
         "asset_set_id": asset_set_id,
@@ -279,7 +332,7 @@ def _merge_llm_review(
     available = config.available_providers()
     if not available:
         raise ValueError("No API providers configured. Omit --llm or set at least one provider API key.")
-    chosen_provider = provider_name or (config.roles.synthesizer if config.roles.synthesizer in available else available[0])
+    chosen_provider = provider_name or config.provider_for("auditor")
     provider = build_provider(chosen_provider, config)
 
     system_prompt = """\
@@ -357,9 +410,10 @@ def _average_sentence_length(text: str) -> float:
 
 
 def _risk_level(score: int) -> str:
-    if score >= 80:
+    thresholds = score_thresholds()
+    if score >= thresholds["pass"]:
         return "low"
-    if score >= 65:
+    if score >= thresholds["human_review"]:
         return "medium"
     return "high"
 
