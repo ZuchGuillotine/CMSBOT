@@ -108,3 +108,157 @@ def test_words_from_character_alignment():
                  "character_end_times_seconds": [.1, .2, .25, .3, .4, .5, .6, .7, .8, .9]}
     assert generate.words_from_alignment(alignment) == [{"word": "Hi", "start": 0.0, "end": 0.2},
                                                         {"word": "there.", "start": 0.3, "end": 0.9}]
+
+
+# ---- music ------------------------------------------------------------------------------------
+
+MUSIC = "Calm minimal ambient instrumental, warm analog synth pads, no vocals."
+
+
+class FakeEleven:
+    """Stands in for api.elevenlabs.io through httpx's mock transport."""
+
+    def __init__(self, tier="creator", status=200):
+        self.tier, self.status, self.requests = tier, status, []
+
+    def __call__(self, request):
+        import httpx
+        self.requests.append(request)
+        if request.url.path == "/v1/user/subscription":
+            return httpx.Response(200, json={"tier": self.tier})
+        if request.url.path == "/v1/music":
+            if self.status >= 400:
+                return httpx.Response(self.status, json={"detail": {"status": "error", "message": "nope"}})
+            return httpx.Response(200, content=b"ID3-music", headers={"content-type": "audio/mpeg", "song-id": "song-42"})
+        return httpx.Response(404)
+
+    def music_bodies(self):
+        import json
+        return [json.loads(r.content) for r in self.requests if r.url.path == "/v1/music"]
+
+
+@pytest.fixture
+def eleven(monkeypatch):
+    import httpx
+    fake = FakeEleven()
+    real = httpx.Client
+    monkeypatch.setattr(generate.httpx, "Client", lambda *a, **k: real(*a, **{**k, "transport": httpx.MockTransport(fake)}))
+    monkeypatch.setitem(generate.PROVIDERS["elevenlabs-music"], "run", generate.elevenlabs_music)  # the real provider
+    monkeypatch.delenv("CMSBOT_ELEVENLABS_MUSIC_MODEL", raising=False)
+    monkeypatch.delenv("MUSIC_PROMPT", raising=False)
+    return fake
+
+
+def _approved(hub, item):
+    hub.submit(GEN, item)
+    hub.approve_script(ADMIN, item)
+
+
+def test_music_request_is_instrumental_clamped_and_uses_the_model_setting(ctx, eleven, monkeypatch):
+    hub, storage, item, _ = ctx
+    _approved(hub, item)
+    monkeypatch.setenv("CMSBOT_ELEVENLABS_MUSIC_MODEL", "music_v2")
+    result = generate.generate_music(hub, storage, GEN, item, prompt=MUSIC, seconds=1)
+    body = eleven.music_bodies()[0]
+    request = next(r for r in eleven.requests if r.url.path == "/v1/music")
+    assert request.method == "POST" and request.headers["xi-api-key"] == "el-key-123456"
+    assert request.url.params["output_format"] == "mp3_44100_128"
+    assert body == {"prompt": MUSIC, "music_length_ms": 3000, "model_id": "music_v2", "force_instrumental": True}
+    assert result["seconds"] == 3 and result["song_id"] == "song-42" and result["plan"] == "creator"
+    long = generate.generate_music(hub, storage, GEN, item, prompt=MUSIC, seconds=5000)  # 10 minutes at most
+    assert eleven.music_bodies()[-1]["music_length_ms"] == 600000 and long["cost_usd"] == pytest.approx(1.5)
+
+
+def test_music_length_is_clamped_to_the_provider_limits():
+    run = generate.PROVIDERS["elevenlabs-music"]
+    assert (run["min_seconds"], run["max_seconds"]) == (3, 600)
+
+
+def test_music_follows_the_voiceover_timing_and_records_cost(ctx, eleven):
+    hub, storage, item, _ = ctx
+    _approved(hub, item)
+    generate._store(hub, storage, GEN, hub.get_item(GEN, item), "timing",
+                    generate.Result(b'{"words": [{"word": "Hook", "start": 0.0, "end": 0.4}, {"word": "End.", "start": 9.1, "end": 9.6}]}',
+                                    ".json", "application/json"))
+    hub.set_setting(ADMIN, "MUSIC_PROMPT", MUSIC, "acme")
+    result = generate.generate_music(hub, storage, GEN, item)
+    assert result["seconds"] == 12 and result["length_from"] == "voiceover timing"   # 9.6s + 2s, rounded up
+    assert eleven.music_bodies()[0]["music_length_ms"] == 12000 and eleven.music_bodies()[0]["prompt"] == MUSIC
+    assert result["cost_usd"] == pytest.approx(12 * 0.0025) and result["cost_is_estimate"] is True
+    assert hub.get_item(GEN, item)["cost_usd"] == pytest.approx(0.03)
+    assert "music" in generate.options(hub, GEN, item)["providers"]["elevenlabs-music"]["kind"]
+
+
+def test_music_length_is_estimated_from_the_script_without_timing(ctx, eleven):
+    hub, storage, item, _ = ctx
+    _approved(hub, item)
+    result = generate.generate_music(hub, storage, GEN, item, prompt=MUSIC)
+    assert result["length_from"] == "estimated from the script" and 3 <= result["seconds"] <= 30
+
+
+def test_music_is_refused_before_script_approval_and_without_a_prompt(ctx, eleven):
+    hub, storage, item, _ = ctx
+    hub.set_setting(ADMIN, "MUSIC_PROMPT", MUSIC, "acme")
+    with pytest.raises(HubError) as early:
+        generate.precheck_music(hub, storage, GEN, item)
+    assert "not been approved" in str(early.value)
+    hub.clear_setting(ADMIN, "MUSIC_PROMPT", "acme")
+    _approved(hub, item)
+    with pytest.raises(HubError) as no_prompt:
+        generate.generate_music(hub, storage, GEN, item)
+    assert "MUSIC_PROMPT" in str(no_prompt.value)
+    assert eleven.music_bodies() == []
+    hub.upsert_project(ADMIN, "acme", "Acme", brand={"voiceover": {"voice_id": "v1"}, "music": {"prompt": MUSIC}})
+    assert generate.generate_music(hub, storage, GEN, item)["prompt"] == MUSIC  # the brand kit's music.prompt
+
+
+def test_music_respects_the_item_cap(ctx, eleven):
+    hub, storage, item, _ = ctx
+    _approved(hub, item)
+    hub.record_cost(GEN, "acme", amount_usd=5.99, category="video", item_id=item)
+    with pytest.raises(HubError) as capped:
+        generate.generate_music(hub, storage, GEN, item, prompt=MUSIC, seconds=60)  # $0.15 > $0.01 left
+    assert capped.value.status == 402 and "media cap" in str(capped.value)
+    assert eleven.music_bodies() == []
+
+
+def test_new_music_replaces_the_old_and_strips_names(ctx, eleven):
+    hub, storage, item, _ = ctx
+    _approved(hub, item)
+    first = generate.generate_music(hub, storage, GEN, item, prompt=MUSIC)
+    second = generate.generate_music(hub, storage, GEN, item, prompt="Warm piano in the style of Ludovico Einaudi, Acme theme, soft")
+    music = [m for m in hub.get_item(GEN, item)["media"] if m.get("role") == "music"]
+    assert [m["url"] for m in music] == [second["url"]] and first["url"] != second["url"]
+    assert eleven.music_bodies()[-1]["prompt"] == "Warm piano, theme, soft"
+
+
+def test_free_plan_is_refused(ctx, eleven):
+    hub, storage, item, _ = ctx
+    _approved(hub, item)
+    eleven.tier = "free"
+    with pytest.raises(HubError) as refused:
+        generate.generate_music(hub, storage, GEN, item, prompt=MUSIC)
+    assert "Free plan" in str(refused.value) and eleven.music_bodies() == []
+
+
+def test_music_is_copied_from_another_item_at_no_cost(ctx, eleven):
+    hub, storage, item, _ = ctx
+    _approved(hub, item)
+    generate.generate_music(hub, storage, GEN, item, prompt=MUSIC)
+    other = hub.create_item(GEN, "acme", kind="short_video", channel="tiktok", title="V2", body=BODY)["id"]
+    _approved(hub, other)
+    calls = len(eleven.music_bodies())
+    copied = generate.generate_music(hub, storage, GEN, other, from_item_id=item)
+    assert copied["copied_from"] == item and copied["cost_usd"] == 0 and len(eleven.music_bodies()) == calls
+    url = hub.video_assets(hub.get_item(GEN, other))["music"]
+    assert url == copied["url"] and storage.path_for(url[len("/media/"):]).read_bytes() == b"ID3-music"
+    assert hub.get_item(GEN, other)["cost_usd"] == 0
+    hub.upsert_project(ADMIN, "beta", "Beta")
+    stranger = hub.create_item(GEN, "beta", kind="short_video", channel="tiktok", title="V3", body=BODY)["id"]
+    with pytest.raises(HubError):
+        generate.generate_music(hub, storage, GEN, stranger, from_item_id=item)
+
+
+def test_clean_music_prompt():
+    assert generate.clean_music_prompt("Lo-fi beat like Nujabes, MicrosTracker vibe", ["microstracker"]) == "Lo-fi beat, vibe"
+    assert generate.clean_music_prompt("slow 70-80 BPM, no drums", []) == "slow 70-80 BPM, no drums"

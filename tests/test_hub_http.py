@@ -126,3 +126,38 @@ def test_each_role_sees_only_its_tools_and_is_told_its_scope():
         hidden = call(client, tokens["distributor"], "save_draft", project="acme", kind="post", channel="x", title="t", body={"text": "x"})
         assert hidden["isError"] and "not part of the distributor role" in hidden["content"][0]["text"]
         assert call(client, tokens["agent"], "whoami")["structuredContent"]["projects"] == ["acme", "other"]
+
+
+def test_music_is_generated_through_the_rest_route_as_a_job(tmp_path, monkeypatch):
+    import time
+
+    from cmsbot.hub import generate
+    from cmsbot.hub.app import ROLE_TOOLS
+    from cmsbot.hub.media import LocalStorage
+
+    monkeypatch.setitem(generate.PROVIDERS["elevenlabs-music"], "run",
+                        lambda prompt, *, cfg, seconds, **_: generate.Result(b"mp3", ".mp3", "audio/mpeg", None, {"song_id": "s1"}))
+    hub = Hub(Store(":memory:"))
+    admin, gen = hub.create_token("a", "admin"), hub.create_token("g", "generator")
+    assert "generate_music" in ROLE_TOOLS["generator"]
+    with TestClient(create_app(hub=hub, storage=LocalStorage(tmp_path))) as client:
+        client.put("/api/projects/acme", json={"name": "Acme"}, headers=auth(admin))
+        client.put("/api/settings/ELEVENLABS_API_KEY", json={"value": "el-key-123456", "project": "acme"}, headers=auth(admin))
+        item = client.post("/api/projects/acme/items", headers=auth(gen),
+                           json={"kind": "short_video", "channel": "tiktok", "title": "V", "body": {"hook": "A hook line."}}).json()["id"]
+        assert client.get(f"/api/items/{item}/media-options", headers=auth(gen)).json()["providers"]["elevenlabs-music"] == {"kind": "music"}
+        client.post(f"/api/items/{item}/submit", headers=auth(gen))
+        client.post(f"/api/items/{item}/approve-script", headers=auth(admin))
+        refused = client.post(f"/api/items/{item}/generate", json={"what": "music"}, headers=auth(gen))
+        assert refused.status_code == 400 and "MUSIC_PROMPT" in refused.text  # refused at once, not inside a job
+        client.put("/api/settings/MUSIC_PROMPT", json={"value": "Soft ambient pads", "project": "acme"}, headers=auth(admin))
+        started = client.post(f"/api/items/{item}/generate", json={"what": "music", "seconds": 20}, headers=auth(gen)).json()
+        assert "job" in started, started
+        job = started["job"]
+        for _ in range(50):
+            job = client.get(f"/api/jobs/{job['id']}", headers=auth(gen)).json()
+            if job["status"] != "running":
+                break
+            time.sleep(0.05)
+        assert job["status"] == "done", job
+        assert job["result"]["seconds"] == 20 and job["result"]["song_id"] == "s1" and job["result"]["cost_usd"] == 0.05

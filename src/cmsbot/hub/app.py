@@ -63,7 +63,7 @@ def _video_summary(item: dict[str, Any]) -> dict[str, Any]:
 
 def _generated_summary(result: dict[str, Any]) -> dict[str, Any]:
     keep = ("item_id", "shot", "role", "url", "provider", "cost_usd", "cost_is_estimate", "words_timed", "disclosure",
-            "item_remaining_usd")
+            "seconds", "length_from", "song_id", "plan", "copied_from", "item_remaining_usd")
     return {k: result[k] for k in keep if k in result}
 
 
@@ -80,6 +80,10 @@ def start_generation(hub: Hub, storage, actor: Actor, item_id: int, what: str, *
         generation.precheck_voiceover(hub, actor, item_id, **options)
         work = lambda: generation.generate_voiceover(hub, storage, actor, item_id, **options)  # noqa: E731
         return {"job": jobs.start(hub, actor, item_id, "generate_voiceover", work, _generated_summary)}
+    if what == "music":
+        generation.precheck_music(hub, storage, actor, item_id, **options)
+        work = lambda: generation.generate_music(hub, storage, actor, item_id, **options)  # noqa: E731
+        return {"job": jobs.start(hub, actor, item_id, "generate_music", work, _generated_summary)}
     generation.precheck_footage(hub, actor, item_id, **options)
     work = lambda: generation.generate_footage(hub, storage, actor, item_id, **options)  # noqa: E731
     return {"job": jobs.start(hub, actor, item_id, f"generate_shot_{int(options['shot']):02d}", work, _generated_summary)}
@@ -90,7 +94,7 @@ ROLE_TOOLS: dict[str, set[str]] = {
     "generator": EVERYONE | {
         "get_brief", "create_cluster", "list_items", "get_item", "save_draft", "check_draft", "set_claims", "submit_for_review",
         "report_failure", "render_carousel", "render_video", "job_status", "media_options", "generate_footage", "generate_voiceover",
-        "import_published", "get_series", "plan_series", "propose_brand", "record_cost", "propose_learning", "submit_signal",
+        "generate_music", "import_published", "get_series", "plan_series", "propose_brand", "record_cost", "propose_learning", "submit_signal",
         "performance", "propose_skill_change"},
     "distributor": EVERYONE | {"ready_to_post", "claim_post", "release_post", "mark_posted", "report_metrics", "submit_signal", "record_cost"},
     "analyst": EVERYONE | {
@@ -310,7 +314,7 @@ def build_mcp(hub: Hub, storage, do_import=None):
 
     @tool
     def media_options(item_id: int) -> dict[str, Any]:
-        """Which image, video and voice providers this Hub can use, and how much of the item's media cap and the
+        """Which image, video, voice and music providers this Hub can use, and how much of the item's media cap and the
         project's monthly budget is left. Read this before generating anything."""
         return generation.options(hub, actor(), item_id)
 
@@ -331,6 +335,15 @@ def build_mcp(hub: Hub, storage, do_import=None):
         sync exactly. Use only when the project has no recorded voiceover. Spends money, within the same caps.
         Returns a job; call job_status(job_id) until done."""
         return start_generation(hub, storage, actor(), item_id, "voiceover", voice_id=voice_id)
+
+    @tool
+    def generate_music(item_id: int, prompt: str = "", seconds: int = 0, from_item_id: int = 0) -> dict[str, Any]:
+        """Generate an instrumental music bed for an approved video script and attach it as `music` (replacing any
+        earlier one); the renderer mixes it low under the voice. Call once the voiceover exists. Leave prompt empty to
+        use the project's music prompt, so every video on the account shares one sound; leave seconds at 0 to match
+        the voiceover's length. from_item_id reuses another item's music at no cost. Spends money, within the same
+        caps. Returns a job; call job_status(job_id) until done."""
+        return start_generation(hub, storage, actor(), item_id, "music", prompt=prompt, seconds=seconds, from_item_id=from_item_id)
 
     @tool
     def set_claims(item_id: int, claims: list[dict[str, Any]]) -> dict[str, Any]:
@@ -823,6 +836,10 @@ def create_app(db_path: str | None = None, *, hub: Hub | None = None, storage=No
         if body.get("what") == "voiceover":
             return start_generation(hub, storage, actor, item_id, "voiceover", voice_id=body.get("voice_id", ""),
                                     provider=body.get("provider", ""))
+        if body.get("what") == "music":
+            return start_generation(hub, storage, actor, item_id, "music", prompt=body.get("prompt", ""),
+                                    seconds=int(body.get("seconds", 0) or 0), provider=body.get("provider", ""),
+                                    from_item_id=int(body.get("from_item_id", 0) or 0))
         return start_generation(hub, storage, actor, item_id, "footage", shot=int(body.get("shot", 0)),
                                 prompt=body.get("prompt", ""), kind=body.get("kind", "video"),
                                 seconds=int(body.get("seconds", 5)), provider=body.get("provider", ""))

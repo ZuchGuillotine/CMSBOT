@@ -60,14 +60,19 @@ ANCHOR_KINDS = ("blog", "newsletter")
 SETTINGS: dict[str, dict[str, str]] = {
     "XAI_API_KEY": {"label": "xAI API key", "kind": "secret", "group": "Generation", "help": "Grok Imagine stills and video."},
     "OPENROUTER_API_KEY": {"label": "OpenRouter API key", "kind": "secret", "group": "Generation", "help": "Seedance video."},
-    "ELEVENLABS_API_KEY": {"label": "ElevenLabs API key", "kind": "secret", "group": "Generation", "help": "Voiceover with word timings."},
+    "ELEVENLABS_API_KEY": {"label": "ElevenLabs API key", "kind": "secret", "group": "Generation", "help": "Voiceover with word timings, and music beds (needs a paid plan)."},
     "ELEVENLABS_VOICE_ID": {"label": "ElevenLabs voice id", "kind": "text", "group": "Generation", "help": "Default voice for voiceovers."},
+    "MUSIC_PROMPT": {"label": "Default music prompt", "kind": "text", "group": "Generation",
+                     "help": "The account's one sound, used for every video's music bed. Describe it; no artist or brand names. Always instrumental."},
+    "CMSBOT_ELEVENLABS_MUSIC_MODEL": {"label": "ElevenLabs music model", "kind": "text", "group": "Generation",
+                                      "help": "music_v1 (default), music_v2 or music_v2_5."},
     "CMSBOT_SEEDANCE_MODEL": {"label": "Seedance model id", "kind": "text", "group": "Generation",
                               "help": "Leave empty to use the newest Seedance model OpenRouter lists."},
     "CMSBOT_RATE_XAI_IMAGE": {"label": "Grok still, $ each", "kind": "number", "group": "Rates for spend checks"},
     "CMSBOT_RATE_XAI_VIDEO_PER_SECOND": {"label": "Grok video, $ per second", "kind": "number", "group": "Rates for spend checks"},
     "CMSBOT_RATE_SEEDANCE_PER_SECOND": {"label": "Seedance, $ per second", "kind": "number", "group": "Rates for spend checks"},
     "CMSBOT_RATE_ELEVENLABS_PER_1K_CHARS": {"label": "ElevenLabs, $ per 1,000 characters", "kind": "number", "group": "Rates for spend checks"},
+    "CMSBOT_RATE_ELEVENLABS_MUSIC_PER_SECOND": {"label": "ElevenLabs music, $ per second", "kind": "number", "group": "Rates for spend checks"},
 }
 
 

@@ -1,7 +1,7 @@
 """`cmsbot hub ...` commands.
 
 Local (act on the database file): init, serve, token.
-Remote (talk to a running Hub with CMSBOT_HUB_URL and CMSBOT_HUB_TOKEN): project, push, ready, brief.
+Remote (talk to a running Hub with CMSBOT_HUB_URL and CMSBOT_HUB_TOKEN): project, push, ready, brief, upload, render, music.
 """
 
 from __future__ import annotations
@@ -253,6 +253,32 @@ def hub_render(item_id: int, local: bool) -> None:
             urls.append(response.json()["url"])
     remote.call("PUT", f"/items/{item_id}/render", {"urls": urls, "style": result["style"], "hash": result["hash"]})
     click.echo(f"#{item_id}: {len(urls)} slides rendered here and attached.")
+
+
+@hub_group.command("music")
+@click.argument("item_id", type=int)
+@click.option("--prompt", default="", help="Describe the sound. Default: the project's music prompt.")
+@click.option("--seconds", type=int, default=0, help="Length. Default: the voiceover's length plus two seconds.")
+@click.option("--from-item", "from_item_id", type=int, default=0, help="Reuse this item's music instead (no cost).")
+def hub_music(item_id: int, prompt: str, seconds: int, from_item_id: int) -> None:
+    """Generate an instrumental music bed for a short video and attach it as `music`."""
+    import time
+
+    remote = Remote()
+    job = remote.call("POST", f"/items/{item_id}/generate",
+                      {"what": "music", "prompt": prompt, "seconds": seconds, "from_item_id": from_item_id})["job"]
+    click.echo(f"#{item_id}: making music (job {job['id']})...")
+    while job["status"] == "running":
+        time.sleep(5)
+        job = remote.call("GET", f"/jobs/{job['id']}")
+    if job["status"] == "failed":
+        raise click.ClickException(job["error"])
+    result = job.get("result") or {}
+    if result.get("copied_from"):
+        click.echo(f"#{item_id}: music copied from #{result['copied_from']} -> {result.get('url')}")
+        return
+    click.echo(f"#{item_id}: {result.get('seconds')}s of music via {result.get('provider')}, "
+               f"${result.get('cost_usd', 0):.2f}{' (estimated)' if result.get('cost_is_estimate') else ''} -> {result.get('url')}")
 
 
 @hub_group.group("skills")

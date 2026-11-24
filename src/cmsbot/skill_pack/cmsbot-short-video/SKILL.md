@@ -46,6 +46,14 @@ shots as a pilot and look at them before the rest. One take per shot unless some
 The Hub refuses a call before the script is approved or once a cap is reached, and records every
 cost itself. If the project has no recorded voiceover, `generate_voiceover(item_id)` speaks the
 script and attaches word timings; a synthetic voice must be labelled when posted.
+Generate the music bed once the voiceover exists: `generate_music(item_id)` uses the project's music
+prompt and the voice's length. Instrumental only. Reuse the account's prompt; don't invent a new
+style per video. For the next video in a series, `generate_music(item_id, from_item_id=<earlier
+video>)` reuses that bed at no cost.
+Generate the music bed once the voiceover exists: `generate_music(item_id)` uses the project's music
+prompt and the voice's length. Instrumental only. Reuse the account's prompt; don't invent a new
+style per video. For the next video in a series, `generate_music(item_id, from_item_id=<earlier
+video>)` reuses that bed at no cost.
 
 ## 6. Assemble: one command
 Attach the files to the item by role, then render:
@@ -77,7 +85,7 @@ goes in `gaps`. Look at the contact sheet for stray text or brand marks in gener
 for realistic generated people. Then `submit_for_review`.
 
 ## Long steps are jobs
-`render_video`, `generate_footage` and `generate_voiceover` return a job at once, because they take
+`render_video`, `generate_footage`, `generate_voiceover` and `generate_music` return a job at once, because they take
 from a minute to several. Call `job_status(job_id)` about every 15 seconds until it says done or
 failed, then continue. Refusals (script not approved, cap reached, no key) come back immediately.
 
