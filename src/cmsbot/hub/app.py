@@ -63,7 +63,7 @@ def _video_summary(item: dict[str, Any]) -> dict[str, Any]:
 
 def _generated_summary(result: dict[str, Any]) -> dict[str, Any]:
     keep = ("item_id", "shot", "role", "url", "provider", "cost_usd", "cost_is_estimate", "words_timed", "disclosure",
-            "seconds", "length_from", "song_id", "plan", "copied_from", "item_remaining_usd")
+            "seconds", "length_from", "song_id", "plan", "style", "copied_from", "item_remaining_usd")
     return {k: result[k] for k in keep if k in result}
 
 
@@ -337,13 +337,16 @@ def build_mcp(hub: Hub, storage, do_import=None):
         return start_generation(hub, storage, actor(), item_id, "voiceover", voice_id=voice_id)
 
     @tool
-    def generate_music(item_id: int, prompt: str = "", seconds: int = 0, from_item_id: int = 0) -> dict[str, Any]:
+    def generate_music(item_id: int, prompt: str = "", seconds: int = 0, from_item_id: int = 0,
+                       provider: str = "") -> dict[str, Any]:
         """Generate an instrumental music bed for an approved video script and attach it as `music` (replacing any
         earlier one); the renderer mixes it low under the voice. Call once the voiceover exists. Leave prompt empty to
         use the project's music prompt, so every video on the account shares one sound; leave seconds at 0 to match
-        the voiceover's length. from_item_id reuses another item's music at no cost. Spends money, within the same
-        caps. Returns a job; call job_status(job_id) until done."""
-        return start_generation(hub, storage, actor(), item_id, "music", prompt=prompt, seconds=seconds, from_item_id=from_item_id)
+        the voiceover's length. from_item_id reuses another item's music. Leave provider empty: the project's
+        choice is used (the Hub's own free synth unless a reviewer chose otherwise). Returns a job; call
+        job_status(job_id) until done."""
+        return start_generation(hub, storage, actor(), item_id, "music", prompt=prompt, seconds=seconds, from_item_id=from_item_id,
+                                provider=provider)
 
     @tool
     def set_claims(item_id: int, claims: list[dict[str, Any]]) -> dict[str, Any]:

@@ -278,7 +278,7 @@ place and every agent can use them without holding a key.
 | `media_options` | Shows what is configured and how much cap and budget is left | |
 | `generate_footage` | A still or a clip for one shot, attached as `shot-NN`; a clip starts from the shot's still | Grok Imagine (`XAI_API_KEY`), Seedance through OpenRouter (`OPENROUTER_API_KEY`) |
 | `generate_voiceover` | Speaks the script, attached with word timings for exact captions | ElevenLabs (`ELEVENLABS_API_KEY`; voice from the brand kit's `voiceover.voice_id` or `ELEVENLABS_VOICE_ID`) |
-| `generate_music` | An instrumental bed as long as the voiceover (last word + 2s), attached as `music` and mixed low under the voice; `from_item_id` reuses another item's bed at no cost | ElevenLabs music (`ELEVENLABS_API_KEY` on a paid plan; prompt from the project's `MUSIC_PROMPT` setting or the brand kit's `music.prompt`; model from `CMSBOT_ELEVENLABS_MUSIC_MODEL`, default `music_v1`) |
+| `generate_music` | An instrumental bed as long as the voiceover (last word + 2s), attached as `music` and mixed low under the voice; `from_item_id` reuses another item's bed | Made on the Hub by default (`synth`: free, no key; prompt from the project's `MUSIC_PROMPT` setting or the brand kit's `music.prompt`). With `MUSIC_PROVIDER` = `elevenlabs-music`: ElevenLabs music (`ELEVENLABS_API_KEY` on a paid plan; model from `CMSBOT_ELEVENLABS_MUSIC_MODEL`, default `music_v1`) |
 
 Rules: nothing is generated before a person approves the script; each item has a media cap
 (project setting `item_media_cap_usd`, default $10); the project's `monthly_budget_usd` is a hard
@@ -291,12 +291,20 @@ key kept beside it (or supplied as `CMSBOT_HUB_SECRET_KEY`), shown afterwards on
 characters, and never sent to an agent. Use Test after saving. A project that has its own provider
 account can have its own key, so its spend lands on its own bill.
 
-Music needs a paid ElevenLabs plan: the Free plan has no music API access and no commercial licence
-for what it generates. Test on the ElevenLabs key reports the plan and whether music is allowed, and
-`generate_music` refuses on a Free key before spending anything. Music is always generated
-instrumental, and brand and artist names are taken out of the prompt. The spend estimate is $0.15
-a minute (ElevenLabs' published API price, November 2026; ElevenLabs reports no cost per call), so
-set "ElevenLabs music, $ per second" on Settings if your price differs.
+Music is made on the Hub itself unless a reviewer chooses otherwise: `cmsbot.video.music` builds a
+calm bed (warm pads, soft felt piano, sub bass, an optional light pulse, a small room) from the plain
+words in the prompt: tempo ("70-80 BPM"), mood ("optimistic", "melancholic"), instruments ("piano",
+"pads", "no drums", "light pulse") and colour ("warm", "bright"). The same prompt always gives the same
+key, chords and sounds, so an account that keeps one prompt keeps one sound. It costs nothing and has
+no licence question. It is a bed for under narration, not a track to stand on its own.
+
+To use ElevenLabs music instead, set Music provider (`MUSIC_PROVIDER`) to `elevenlabs-music`. That
+needs a paid ElevenLabs plan: the Free plan has no music API access and no commercial licence for what
+it generates. Test on the ElevenLabs key reports the plan and whether music is allowed, and
+`generate_music` refuses on a Free key before spending anything. ElevenLabs music is always generated
+instrumental, and brand and artist names are taken out of the prompt. Its spend estimate is $0.15 a
+minute (ElevenLabs' published API price, November 2026; ElevenLabs reports no cost per call), so set
+"ElevenLabs music, $ per second" on Settings if your price differs.
 
 ## Who can see what
 

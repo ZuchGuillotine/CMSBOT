@@ -146,6 +146,7 @@ def eleven(monkeypatch):
     monkeypatch.setitem(generate.PROVIDERS["elevenlabs-music"], "run", generate.elevenlabs_music)  # the real provider
     monkeypatch.delenv("CMSBOT_ELEVENLABS_MUSIC_MODEL", raising=False)
     monkeypatch.delenv("MUSIC_PROMPT", raising=False)
+    monkeypatch.setenv("MUSIC_PROVIDER", "elevenlabs-music")  # the synth is the default; these tests are about ElevenLabs
     return fake
 
 
@@ -262,3 +263,44 @@ def test_music_is_copied_from_another_item_at_no_cost(ctx, eleven):
 def test_clean_music_prompt():
     assert generate.clean_music_prompt("Lo-fi beat like Nujabes, MicrosTracker vibe", ["microstracker"]) == "Lo-fi beat, vibe"
     assert generate.clean_music_prompt("slow 70-80 BPM, no drums", []) == "slow 70-80 BPM, no drums"
+
+
+def test_synth_is_the_default_music_and_costs_nothing(ctx, monkeypatch):
+    import subprocess
+    hub, storage, item, _ = ctx
+    monkeypatch.delenv("MUSIC_PROVIDER", raising=False)
+    hub.clear_setting(ADMIN, "ELEVENLABS_API_KEY", "acme")   # no key needed
+    assert generate.options(hub, GEN, item)["providers"]["synth"] == {"kind": "music"}
+    _approved(hub, item)
+    hub.set_setting(ADMIN, "MUSIC_PROMPT", "Calm ambient, warm analog synth pads and soft felt piano, 70-80 BPM, "
+                    "optimistic, no drums or a very light pulse", "acme")
+    result = generate.generate_music(hub, storage, GEN, item, seconds=6)
+    assert result["provider"] == "synth" and result["cost_usd"] == 0 and result["cost_is_estimate"] is False
+    assert "75 BPM" in result["style"] and "felt piano" in result["style"] and "light pulse" in result["style"]
+    url = hub.video_assets(hub.get_item(GEN, item))["music"]
+    path = storage.path_for(url[len("/media/"):])
+    seconds = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                                   check=True, capture_output=True, text=True).stdout)
+    assert 5.9 < seconds < 6.2
+    costs = hub.db.all("SELECT * FROM costs WHERE item_id = ?", (item,))
+    assert [(c["amount_usd"], c["note"]) for c in costs] == [(0.0, "music via synth")]
+
+
+def test_synth_keeps_one_sound_per_prompt():
+    from cmsbot.video import music
+    prompt = "Calm minimal ambient, warm pads, soft felt piano, slow 70-80 BPM, gentle and optimistic, no drums"
+    a, b = music.synthesize(prompt, 8), music.synthesize(prompt, 8)
+    assert a.shape == (8 * music.RATE, 2) and (abs(a) <= 1).all() and (a == b).all()
+    style = music.style_from_prompt(prompt)
+    assert (style.bpm, style.minor, style.piano, style.pads, style.pulse) == (75.0, False, True, True, 0.0)
+    assert music.style_from_prompt("melancholic piano, 60 BPM").minor
+    assert music.style_from_prompt("dark drone pads").piano is False
+
+
+def test_unknown_music_provider_is_explained(ctx, monkeypatch):
+    hub, storage, item, _ = ctx
+    _approved(hub, item)
+    monkeypatch.setenv("MUSIC_PROVIDER", "suno")
+    with pytest.raises(HubError) as wrong:
+        generate.generate_music(hub, storage, GEN, item, prompt="calm pads")
+    assert "synth" in str(wrong.value)

@@ -5,8 +5,9 @@ Keys are entered by a reviewer under Settings (stored encrypted), per project or
 environment variables of the same names still work as a fallback:
   XAI_API_KEY           Grok Imagine stills and video
   OPENROUTER_API_KEY    Seedance video (model from CMSBOT_SEEDANCE_MODEL, or the newest Seedance listed)
-  ELEVENLABS_API_KEY    voiceover with word timings (voice from the brand kit or ELEVENLABS_VOICE_ID), and an
-                        instrumental music bed (prompt from MUSIC_PROMPT or the brand kit's music.prompt)
+  ELEVENLABS_API_KEY    voiceover with word timings (voice from the brand kit or ELEVENLABS_VOICE_ID), and, when
+                        MUSIC_PROVIDER is elevenlabs-music, the music bed (needs a paid ElevenLabs plan)
+Music beds are otherwise made on the Hub itself ("synth"), free, from MUSIC_PROMPT or the brand kit's music.prompt.
 
 Rates used for the spend check are estimates unless the provider reports a cost; override them with
 the rate settings.
@@ -217,6 +218,18 @@ def elevenlabs_music(prompt: str, *, cfg: Config, seconds: int, **_: Any) -> Res
                   {"song_id": response.headers.get("song-id"), "plan": tier, "model": model, "prompt": suggestion or prompt})
 
 
+def synth_music(prompt: str, *, seconds: int, **_: Any) -> Result:
+    """An instrumental bed made on the Hub from the prompt's tempo, mood and instruments. Free."""
+    from cmsbot.video import music
+
+    length = max(MUSIC_MIN_SECONDS, min(int(seconds), MUSIC_MAX_SECONDS))
+    try:
+        data = music.render_mp3(prompt, length)
+    except (RuntimeError, OSError) as exc:
+        raise ProviderError(f"The Hub could not make the music: {exc}") from exc
+    return Result(data, ".mp3", "audio/mpeg", 0.0, {"style": music.style_from_prompt(prompt).describe()})
+
+
 PROVIDERS: dict[str, dict[str, Any]] = {
     "grok-image": {"kind": "image", "env": "XAI_API_KEY", "run": xai_image, "category": "image", "vendor": "xai",
                    "estimate": lambda cfg, seconds, chars: _rate(cfg, "XAI_IMAGE", 0.07)},
@@ -226,6 +239,11 @@ PROVIDERS: dict[str, dict[str, Any]] = {
                  "estimate": lambda cfg, seconds, chars: seconds * _rate(cfg, "SEEDANCE_PER_SECOND", 0.50)},
     "elevenlabs": {"kind": "voice", "env": "ELEVENLABS_API_KEY", "run": elevenlabs_voice, "category": "audio", "vendor": "elevenlabs",
                    "estimate": lambda cfg, seconds, chars: chars / 1000 * _rate(cfg, "ELEVENLABS_PER_1K_CHARS", 0.30)},
+    # Made on the Hub in code (cmsbot.video.music): no key, no cost, no licence question. The default for music;
+    # set MUSIC_PROVIDER to elevenlabs-music to use the ElevenLabs music API instead.
+    "synth": {"kind": "music", "env": None, "run": synth_music, "category": "audio", "vendor": "cmsbot",
+              "min_seconds": MUSIC_MIN_SECONDS, "max_seconds": MUSIC_MAX_SECONDS,
+              "estimate": lambda cfg, seconds, chars: 0.0},
     # Eleven Music API: $0.15 a minute on paid plans (elevenlabs.io/pricing/api, Nov 2026), so $0.0025 a second.
     "elevenlabs-music": {"kind": "music", "env": "ELEVENLABS_API_KEY", "run": elevenlabs_music, "category": "audio",
                          "vendor": "elevenlabs", "min_seconds": MUSIC_MIN_SECONDS, "max_seconds": MUSIC_MAX_SECONDS,
@@ -238,7 +256,9 @@ def _config(hub: Hub, project: str) -> Config:
 
 
 def configured(cfg: Config, kind: str | None = None) -> list[str]:
-    return [name for name, spec in PROVIDERS.items() if cfg(spec["env"]) and (kind is None or spec["kind"] == kind)]
+    """Providers that can run: those with their key set, and the ones that need no key."""
+    return [name for name, spec in PROVIDERS.items()
+            if (spec["env"] is None or cfg(spec["env"])) and (kind is None or spec["kind"] == kind)]
 
 
 def test_key(hub: Hub, actor: Actor, name: str, project: str | None = None) -> dict[str, Any]:
@@ -268,7 +288,7 @@ def test_key(hub: Hub, actor: Actor, name: str, project: str | None = None) -> d
         result["plan"], result["music_allowed"] = tier, allowed
         result["detail"] += (" Plan: unknown (the key may not read its subscription), so music access is unconfirmed." if allowed is None
                              else f" Plan: {tier}; music API and commercial use of generated music: "
-                                  + ("yes." if allowed else "no (the Free plan has neither)."))
+                                  + ("yes." if allowed else "no (the Free plan has neither; the Hub's own synth makes music instead)."))
     return result
 
 
@@ -527,7 +547,7 @@ def _music_plan(hub: Hub, storage, actor: Actor, item_id: int, prompt: str, seco
     if not cleaned:
         raise HubError("The music prompt is empty once brand and artist names are taken out. Describe the sound instead.")
     cfg = _config(hub, item["project"])
-    name, spec = _pick(cfg, "music", provider)
+    name, spec = _pick(cfg, "music", provider or cfg("MUSIC_PROVIDER") or "")
     if seconds and int(seconds) > 0:
         length, basis = int(seconds), "asked for"
     else:
@@ -570,5 +590,6 @@ def generate_music(hub: Hub, storage, actor: Actor, item_id: int, *, prompt: str
                     note=f"music via {name}" + ("" if result.cost_usd is not None else " (estimated)"))
     extra = result.extra or {}
     return {"item_id": item_id, "role": "music", "url": url, "provider": name, "seconds": plan["seconds"],
-            "length_from": plan["basis"], "prompt": extra.get("prompt") or plan["prompt"], "song_id": extra.get("song_id"), "plan": extra.get("plan"),
+            "length_from": plan["basis"], "prompt": extra.get("prompt") or plan["prompt"], "song_id": extra.get("song_id"),
+            "plan": extra.get("plan"), "style": extra.get("style"),
             "cost_usd": cost, "cost_is_estimate": result.cost_usd is None, **options(hub, actor, item_id)}

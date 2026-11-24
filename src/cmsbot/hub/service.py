@@ -60,10 +60,12 @@ ANCHOR_KINDS = ("blog", "newsletter")
 SETTINGS: dict[str, dict[str, str]] = {
     "XAI_API_KEY": {"label": "xAI API key", "kind": "secret", "group": "Generation", "help": "Grok Imagine stills and video."},
     "OPENROUTER_API_KEY": {"label": "OpenRouter API key", "kind": "secret", "group": "Generation", "help": "Seedance video."},
-    "ELEVENLABS_API_KEY": {"label": "ElevenLabs API key", "kind": "secret", "group": "Generation", "help": "Voiceover with word timings, and music beds (needs a paid plan)."},
+    "ELEVENLABS_API_KEY": {"label": "ElevenLabs API key", "kind": "secret", "group": "Generation", "help": "Voiceover with word timings; music too if Music provider is elevenlabs-music (paid plan)."},
     "ELEVENLABS_VOICE_ID": {"label": "ElevenLabs voice id", "kind": "text", "group": "Generation", "help": "Default voice for voiceovers."},
     "MUSIC_PROMPT": {"label": "Default music prompt", "kind": "text", "group": "Generation",
                      "help": "The account's one sound, used for every video's music bed. Describe it; no artist or brand names. Always instrumental."},
+    "MUSIC_PROVIDER": {"label": "Music provider", "kind": "text", "group": "Generation",
+                       "help": "synth (default: made on the Hub, free) or elevenlabs-music (needs a paid ElevenLabs plan)."},
     "CMSBOT_ELEVENLABS_MUSIC_MODEL": {"label": "ElevenLabs music model", "kind": "text", "group": "Generation",
                                       "help": "music_v1 (default), music_v2 or music_v2_5."},
     "CMSBOT_SEEDANCE_MODEL": {"label": "Seedance model id", "kind": "text", "group": "Generation",

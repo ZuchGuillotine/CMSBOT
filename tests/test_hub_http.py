@@ -137,6 +137,7 @@ def test_music_is_generated_through_the_rest_route_as_a_job(tmp_path, monkeypatc
 
     monkeypatch.setitem(generate.PROVIDERS["elevenlabs-music"], "run",
                         lambda prompt, *, cfg, seconds, **_: generate.Result(b"mp3", ".mp3", "audio/mpeg", None, {"song_id": "s1"}))
+    monkeypatch.setenv("MUSIC_PROVIDER", "elevenlabs-music")
     hub = Hub(Store(":memory:"))
     admin, gen = hub.create_token("a", "admin"), hub.create_token("g", "generator")
     assert "generate_music" in ROLE_TOOLS["generator"]
